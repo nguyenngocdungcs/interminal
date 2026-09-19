@@ -73,10 +73,10 @@ export class TerminalMcpServer {
 
     this.server.tool(
       'send_input',
-      'Send input only to the running foreground command identified by command_id.',
+      'Send input only to the running foreground command identified by command_id. Automatically appends a trailing newline if not present.',
       {
         command_id: z.string().describe('Command ID returned by start_command.'),
-        input: z.string().describe('Raw input or control characters to send.'),
+        input: z.string().describe('Input string or control characters to send.'),
       },
       async ({ command_id, input }) => {
         try {

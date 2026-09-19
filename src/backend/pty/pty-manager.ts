@@ -40,6 +40,8 @@ interface CommandRecord {
   interruptTimer?: NodeJS.Timeout;
   resolve: (result: CommandResult) => void;
   completion: Promise<CommandResult>;
+  webUiBuffer?: string;
+  webUiStarted?: boolean;
 }
 
 const COMPLETED_HISTORY_LIMIT = 20;
@@ -110,8 +112,7 @@ export class PtyManager extends EventEmitter {
       if (this.ptyProcess !== sessionPty) {
         return;
       }
-      // Browser viewers receive the exact PTY stream, including private markers.
-      this.emit('data', data);
+      this.emitWebUiData(data);
       if (this.activeCommand) {
         this.consumeCommandData(this.activeCommand, data);
       }
@@ -223,7 +224,8 @@ export class PtyManager extends EventEmitter {
     if (record !== this.activeCommand || record.status !== 'running') {
       throw new Error(`Command ${commandId} is not running and cannot receive input.`);
     }
-    this.write(input);
+    const formattedInput = input.endsWith('\n') || input.endsWith('\r') ? input : `${input}\n`;
+    this.write(formattedInput);
     return this.snapshot(record);
   }
 
@@ -343,6 +345,10 @@ export class PtyManager extends EventEmitter {
       clearTimeout(record.interruptTimer);
       record.interruptTimer = undefined;
     }
+    if (record.webUiBuffer && !record.webUiStarted) {
+      this.emit('data', record.webUiBuffer);
+      record.webUiBuffer = '';
+    }
     record.status = status;
     record.exitCode = exitCode;
     if (this.activeCommand === record) {
@@ -351,6 +357,26 @@ export class PtyManager extends EventEmitter {
     }
     record.resolve(this.snapshot(record));
     this.trimHistory();
+  }
+
+  private emitWebUiData(data: string): void {
+    const record = this.activeCommand;
+    if (!record || record.webUiStarted) {
+      this.emit('data', data);
+      return;
+    }
+
+    record.webUiBuffer = (record.webUiBuffer || '') + data;
+    const markerIndex = record.webUiBuffer.indexOf(record.startMarker);
+    if (markerIndex < 0) {
+      return;
+    }
+
+    record.webUiStarted = true;
+    const remaining = record.webUiBuffer.slice(markerIndex);
+    record.webUiBuffer = '';
+    const formattedCommand = record.command.replace(/\r?\n/g, '\r\n');
+    this.emit('data', `${formattedCommand}\r\n${remaining}`);
   }
 
   private getCommand(commandId: string): CommandRecord {

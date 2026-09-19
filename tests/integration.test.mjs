@@ -51,7 +51,9 @@ async function test() {
 
   const totalWsText = receivedOutputChunks.join('');
   const wsReceivedText = totalWsText.includes('WS_STREAM_TEST');
+  const wsHasNoWrappedNoise = !totalWsText.includes('base64 -d') && !totalWsText.includes('eval "$(');
   console.log('WebSocket stream received live chunks:', wsReceivedText);
+  console.log('WebSocket stream suppressed command wrapper noise:', wsHasNoWrappedNoise);
 
   // 3. Test sending human keystroke from WebSocket client to PTY
   console.log('\n[Integration Test] Testing manual human input via WebSocket');
@@ -68,7 +70,7 @@ async function test() {
   ws.close();
   await webServer.stop();
 
-  if (result.exitCode === 0 && wsReceivedText && wsReceivedManualInput) {
+  if (result.exitCode === 0 && wsReceivedText && wsHasNoWrappedNoise && wsReceivedManualInput) {
     console.log('\n🎉 ALL INTEGRATION TESTS PASSED!');
     process.exit(0);
   } else {

@@ -68,13 +68,13 @@ assert.match(jsonResult(duplicate).error, /another command/i);
 const firstPrompt = await pollUntil(client, started.commandId, (_snapshot, output) => output.includes('What is your name?'));
 const sentName = await client.callTool({
   name: 'send_input',
-  arguments: { command_id: started.commandId, input: 'Alice\n' },
+  arguments: { command_id: started.commandId, input: 'Alice' },
 });
 assert.equal(jsonResult(sentName).status, 'running');
 const secondPrompt = await pollUntil(client, started.commandId, (_snapshot, output) => output.includes('How old are you?'), firstPrompt.nextOffset);
 await client.callTool({
   name: 'send_input',
-  arguments: { command_id: started.commandId, input: '30\n' },
+  arguments: { command_id: started.commandId, input: '30' },
 });
 const complete = await pollUntil(client, started.commandId, (snapshot, output) => snapshot.status === 'exited' && output.includes('Your name is Alice and you are 30 years old.'), secondPrompt.nextOffset);
 assert.equal(complete.snapshot.exitCode, 0);
