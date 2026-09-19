@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { PtyManager } from '../pty/pty-manager.js';
 
 export class TerminalMcpServer {
-  private server: McpServer;
+  public readonly server: McpServer;
   private ptyManager: PtyManager;
 
   constructor(ptyManager: PtyManager) {
@@ -13,106 +13,133 @@ export class TerminalMcpServer {
       name: 'interminal',
       version: '0.1.0',
     });
-
     this.registerTools();
   }
 
   private registerTools(): void {
-    // 1. Tool: execute_command
     this.server.tool(
       'execute_command',
-      'Execute a command in the persistent terminal session, streaming its output in real-time to the web viewer and awaiting final exit code and response.',
+      'Execute a command in the persistent terminal and block until it exits or reaches its safety timeout.',
       {
         command: z.string().describe('The shell command to execute.'),
-        timeout_ms: z.number().optional().describe('Timeout in milliseconds (default: 60000).'),
+        timeout_ms: z.number().positive().optional().describe('Safety timeout in milliseconds (default: 60000).'),
       },
       async ({ command, timeout_ms }) => {
         try {
-          const result = await this.ptyManager.executeCommand(command, timeout_ms || 60000);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  output: result.output,
-                  exitCode: result.exitCode,
-                  success: result.exitCode === 0,
-                }, null, 2),
-              },
-            ],
+          const started = this.ptyManager.startCommand(command, timeout_ms ?? 60000);
+          const result = await this.ptyManager.waitForCommand(started.commandId);
+          const payload = {
+            ...result,
+            success: result.status === 'exited' && result.exitCode === 0,
           };
-        } catch (error: any) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: `Execution Error: ${error?.message || String(error)}`,
-              },
-            ],
-          };
+          return this.jsonResponse(payload, result.status !== 'exited');
+        } catch (error) {
+          return this.errorResponse(error);
         }
-      }
+      },
     );
 
-    // 2. Tool: send_input
+    this.server.tool(
+      'start_command',
+      'Start a foreground command without blocking. Use its commandId to poll, send input, or cancel.',
+      {
+        command: z.string().describe('The shell command to execute.'),
+        timeout_ms: z.number().positive().optional().describe('Safety timeout in milliseconds (default: 60000).'),
+      },
+      async ({ command, timeout_ms }) => {
+        try {
+          return this.jsonResponse(this.ptyManager.startCommand(command, timeout_ms ?? 60000));
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
+    this.server.tool(
+      'poll_command',
+      'Read command output from an absolute character offset and inspect its lifecycle state.',
+      {
+        command_id: z.string().describe('Command ID returned by start_command.'),
+        offset: z.number().int().nonnegative().optional().describe('Absolute output offset (default: 0).'),
+      },
+      async ({ command_id, offset }) => {
+        try {
+          return this.jsonResponse(this.ptyManager.pollCommand(command_id, offset ?? 0));
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
     this.server.tool(
       'send_input',
-      'Send raw input characters (e.g. answering prompts with "y\\n", or sending Ctrl+C via "\\x03") directly to the active terminal.',
+      'Send input only to the running foreground command identified by command_id.',
       {
-        input: z.string().describe('Raw input string or control character sequence.'),
+        command_id: z.string().describe('Command ID returned by start_command.'),
+        input: z.string().describe('Raw input or control characters to send.'),
       },
-      async ({ input }) => {
-        this.ptyManager.write(input);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Successfully sent ${JSON.stringify(input)} to the terminal.`,
-            },
-          ],
-        };
-      }
+      async ({ command_id, input }) => {
+        try {
+          return this.jsonResponse(this.ptyManager.sendInput(command_id, input));
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
     );
 
-    // 3. Tool: start_session
+    this.server.tool(
+      'cancel_command',
+      'Cancel the running foreground command identified by command_id using Ctrl+C.',
+      {
+        command_id: z.string().describe('Command ID returned by start_command.'),
+      },
+      async ({ command_id }) => {
+        try {
+          return this.jsonResponse(await this.ptyManager.cancelCommand(command_id));
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
     this.server.tool(
       'start_session',
-      'Start a new terminal session. Either local shell or remote SSH session.',
+      'Start a new local shell or remote SSH terminal session.',
       {
         session_type: z.enum(['local', 'ssh']).describe('Session type ("local" or "ssh").'),
-        target: z.string().optional().describe('SSH connection target (e.g., "user@hostname" or "-p 2222 user@host"). Only for ssh type.'),
+        target: z.string().optional().describe('SSH target and optional arguments. Required for ssh sessions.'),
       },
       async ({ session_type, target }) => {
-        const status = this.ptyManager.spawnSession(session_type, target);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(status, null, 2),
-            },
-          ],
-        };
-      }
+        try {
+          if (session_type === 'ssh' && !target) {
+            throw new Error('target is required for an SSH session.');
+          }
+          return this.jsonResponse(this.ptyManager.spawnSession(session_type, target));
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
     );
 
-    // 4. Tool: get_session_status
     this.server.tool(
       'get_session_status',
-      'Retrieve current terminal session status, type, process PID, and dimensions.',
+      'Retrieve terminal session type, process PID, busy state, and dimensions.',
       {},
-      async () => {
-        const status = this.ptyManager.getStatus();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(status, null, 2),
-            },
-          ],
-        };
-      }
+      async () => this.jsonResponse(this.ptyManager.getStatus()),
     );
+  }
+
+  private jsonResponse(payload: unknown, isError = false) {
+    return {
+      ...(isError ? { isError: true } : {}),
+      content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+    };
+  }
+
+  private errorResponse(error: unknown) {
+    return this.jsonResponse({
+      error: error instanceof Error ? error.message : String(error),
+    }, true);
   }
 
   public async start(): Promise<void> {

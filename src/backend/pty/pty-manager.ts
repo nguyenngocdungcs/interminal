@@ -1,7 +1,9 @@
 import * as pty from 'node-pty';
+import { randomBytes, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
 export type SessionType = 'local' | 'ssh';
+export type CommandStatus = 'running' | 'exited' | 'timed_out' | 'cancelled';
 
 export interface SessionStatus {
   sessionType: SessionType;
@@ -12,40 +14,57 @@ export interface SessionStatus {
   rows: number;
 }
 
-export interface CommandResult {
+export interface CommandSnapshot {
+  commandId: string;
+  command: string;
+  status: CommandStatus;
   output: string;
-  exitCode: number;
+  nextOffset: number;
+  exitCode: number | null;
 }
+
+export type CommandResult = CommandSnapshot;
+
+interface CommandRecord {
+  commandId: string;
+  command: string;
+  nonce: string;
+  startMarker: string;
+  endPrefix: string;
+  phase: 'awaiting_start' | 'capturing';
+  parserBuffer: string;
+  output: string;
+  status: CommandStatus;
+  exitCode: number | null;
+  timer: NodeJS.Timeout;
+  interruptTimer?: NodeJS.Timeout;
+  resolve: (result: CommandResult) => void;
+  completion: Promise<CommandResult>;
+}
+
+const COMPLETED_HISTORY_LIMIT = 20;
+const CANCEL_GRACE_MS = 1000;
+const ANSI_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 export class PtyManager extends EventEmitter {
   private ptyProcess: pty.IPty | null = null;
   private sessionType: SessionType = 'local';
   private target?: string;
-  private isBusy: boolean = false;
-  private cols: number = 80;
-  private rows: number = 24;
-
-  // Active command execution listener
-  private activeCommand: {
-    command: string;
-    buffer: string;
-    resolve: (result: CommandResult) => void;
-    reject: (error: Error) => void;
-    timer: NodeJS.Timeout;
-    idleTimer?: NodeJS.Timeout;
-  } | null = null;
-
-  constructor() {
-    super();
-  }
+  private isBusy = false;
+  private cols = 80;
+  private rows = 24;
+  private activeCommand: CommandRecord | null = null;
+  private commands = new Map<string, CommandRecord>();
 
   public spawnSession(type: SessionType = 'local', target?: string): SessionStatus {
-    // Clean up existing session if any
+    if (this.activeCommand) {
+      this.finishCommand(this.activeCommand, 'cancelled', null);
+    }
     if (this.ptyProcess) {
       try {
         this.ptyProcess.kill();
-      } catch (e) {
-        // Ignore cleanup errors
+      } catch {
+        // Ignore cleanup errors while replacing a session.
       }
       this.ptyProcess = null;
     }
@@ -56,7 +75,6 @@ export class PtyManager extends EventEmitter {
     const shell = process.platform === 'win32'
       ? 'powershell.exe'
       : (process.env.SHELL || '/bin/zsh');
-
     const env = {
       ...process.env,
       TERM: 'xterm-256color',
@@ -76,9 +94,8 @@ export class PtyManager extends EventEmitter {
       try {
         workingDir = process.cwd();
       } catch {
-        // Fallback if process.cwd() is unavailable
+        // Fall back when the parent process has an invalid cwd.
       }
-
       this.ptyProcess = pty.spawn(shell, [], {
         name: 'xterm-256color',
         cols: this.cols,
@@ -88,51 +105,32 @@ export class PtyManager extends EventEmitter {
       });
     }
 
-    this.ptyProcess.onData((data: string) => {
-      // Emit raw stream event for WebSocket broadcast
+    const sessionPty = this.ptyProcess;
+    sessionPty.onData((data: string) => {
+      if (this.ptyProcess !== sessionPty) {
+        return;
+      }
+      // Browser viewers receive the exact PTY stream, including private markers.
       this.emit('data', data);
-
-      // Handle active MCP command execution buffer
       if (this.activeCommand) {
-        this.activeCommand.buffer += data;
-
-        // Reset idle debounce timer on every new chunk of data
-        if (this.activeCommand.idleTimer) {
-          clearTimeout(this.activeCommand.idleTimer);
-        }
-
-        // Wait for 300ms of stream silence to assume command has produced its output
-        this.activeCommand.idleTimer = setTimeout(() => {
-          if (this.activeCommand) {
-            clearTimeout(this.activeCommand.timer);
-
-            const ansiRegex = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-            let cleanOutput = this.activeCommand.buffer
-              .replace(ansiRegex, '')
-              .replace(/\r\n/g, '\n')
-              .trim();
-
-            const resolve = this.activeCommand.resolve;
-            this.activeCommand = null;
-            this.isBusy = false;
-            resolve({ output: cleanOutput, exitCode: 0 });
-          }
-        }, 300);
+        this.consumeCommandData(this.activeCommand, data);
       }
     });
 
-    this.ptyProcess.onExit(({ exitCode, signal }) => {
+    sessionPty.onExit(({ exitCode, signal }) => {
+      if (this.ptyProcess !== sessionPty) {
+        return;
+      }
       this.emit('exit', { exitCode, signal });
       if (this.activeCommand) {
-        clearTimeout(this.activeCommand.timer);
-        if (this.activeCommand.idleTimer) {
-          clearTimeout(this.activeCommand.idleTimer);
-        }
-        this.activeCommand.resolve({
-          output: this.activeCommand.buffer,
-          exitCode: exitCode ?? -1,
-        });
-        this.activeCommand = null;
+        const record = this.activeCommand;
+        this.appendOutput(record, record.parserBuffer);
+        record.parserBuffer = '';
+        this.finishCommand(
+          record,
+          record.status === 'running' ? 'exited' : record.status,
+          record.status === 'running' ? (exitCode ?? -1) : null,
+        );
       }
       this.ptyProcess = null;
       this.isBusy = false;
@@ -142,9 +140,7 @@ export class PtyManager extends EventEmitter {
   }
 
   public write(data: string): void {
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-    }
+    this.ptyProcess?.write(data);
   }
 
   public resize(cols: number, rows: number): void {
@@ -153,44 +149,106 @@ export class PtyManager extends EventEmitter {
     if (this.ptyProcess) {
       try {
         this.ptyProcess.resize(this.cols, this.rows);
-      } catch (e) {
-        // ignore resize if pty is transitioning
+      } catch {
+        // Ignore resize while the PTY is transitioning.
       }
     }
   }
 
-  public async executeCommand(command: string, timeoutMs: number = 60000): Promise<CommandResult> {
+  public startCommand(command: string, timeoutMs: number = 60000): CommandSnapshot {
+    if (process.platform === 'win32') {
+      throw new Error('Command lifecycle markers currently require a POSIX-compatible shell.');
+    }
     if (!this.ptyProcess) {
       this.spawnSession(this.sessionType, this.target);
     }
-
     if (this.activeCommand) {
       throw new Error('Another command is currently executing.');
     }
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new Error('timeoutMs must be a positive number.');
+    }
 
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.activeCommand) {
-          this.write('\x03');
-          const timeoutBuffer = this.activeCommand.buffer;
-          this.activeCommand = null;
-          this.isBusy = false;
-          reject(new Error(`Command timed out after ${timeoutMs}ms. Output before timeout: ${timeoutBuffer}`));
-        }
-      }, timeoutMs);
-
-      this.isBusy = true;
-      this.activeCommand = {
-        command,
-        buffer: '',
-        resolve,
-        reject,
-        timer,
-      };
-
-      // Direct write with no echo sentinel wrapper
-      this.write(`${command}\n`);
+    const commandId = randomUUID();
+    const nonce = randomBytes(24).toString('hex');
+    const startMarker = `\x1b]777;interminal;${nonce};start\x07`;
+    const endPrefix = `\x1b]777;interminal;${nonce};end;`;
+    let resolve!: (result: CommandResult) => void;
+    const completion = new Promise<CommandResult>((done) => {
+      resolve = done;
     });
+    const record: CommandRecord = {
+      commandId,
+      command,
+      nonce,
+      startMarker,
+      endPrefix,
+      phase: 'awaiting_start',
+      parserBuffer: '',
+      output: '',
+      status: 'running',
+      exitCode: null,
+      timer: setTimeout(() => {
+        if (record.status === 'running') {
+          record.status = 'timed_out';
+          record.exitCode = null;
+          this.write('\x03');
+          record.interruptTimer = setTimeout(() => {
+            this.forceStopSession(record);
+          }, CANCEL_GRACE_MS);
+        }
+      }, timeoutMs),
+      resolve,
+      completion,
+    };
+
+    this.activeCommand = record;
+    this.commands.set(commandId, record);
+    this.isBusy = true;
+    this.trimHistory();
+    this.write(this.wrapCommand(command, record));
+    return this.snapshot(record);
+  }
+
+  public pollCommand(commandId: string, offset: number = 0): CommandSnapshot {
+    const record = this.getCommand(commandId);
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new Error('offset must be a non-negative integer.');
+    }
+    return this.snapshot(record, offset);
+  }
+
+  public sendInput(commandId: string, input: string): CommandSnapshot {
+    const record = this.getCommand(commandId);
+    if (record !== this.activeCommand || record.status !== 'running') {
+      throw new Error(`Command ${commandId} is not running and cannot receive input.`);
+    }
+    this.write(input);
+    return this.snapshot(record);
+  }
+
+  public async cancelCommand(commandId: string): Promise<CommandSnapshot> {
+    const record = this.getCommand(commandId);
+    if (record !== this.activeCommand || record.status !== 'running') {
+      throw new Error(`Command ${commandId} is not running and cannot be cancelled.`);
+    }
+    record.status = 'cancelled';
+    record.exitCode = null;
+    clearTimeout(record.timer);
+    this.write('\x03');
+    record.interruptTimer = setTimeout(() => {
+      this.forceStopSession(record);
+    }, CANCEL_GRACE_MS);
+    return record.completion;
+  }
+
+  public waitForCommand(commandId: string): Promise<CommandResult> {
+    return this.getCommand(commandId).completion;
+  }
+
+  public async executeCommand(command: string, timeoutMs: number = 60000): Promise<CommandResult> {
+    const started = this.startCommand(command, timeoutMs);
+    return this.waitForCommand(started.commandId);
   }
 
   public getStatus(): SessionStatus {
@@ -202,5 +260,126 @@ export class PtyManager extends EventEmitter {
       cols: this.cols,
       rows: this.rows,
     };
+  }
+
+  private wrapCommand(command: string, record: CommandRecord): string {
+    const encoded = Buffer.from(command, 'utf8').toString('base64');
+    const start = `\\033]777;interminal;${record.nonce};start\\007`;
+    const end = `\\033]777;interminal;${record.nonce};end;%s\\007`;
+    return `printf '${start}'; eval "$(printf '%s' '${encoded}' | base64 -d)"; __interminal_ec=$?; printf '${end}' "$__interminal_ec"\n`;
+  }
+
+  private consumeCommandData(record: CommandRecord, data: string): void {
+    record.parserBuffer += data;
+
+    if (record.phase === 'awaiting_start') {
+      const markerIndex = record.parserBuffer.indexOf(record.startMarker);
+      if (markerIndex < 0) {
+        record.parserBuffer = this.possibleMarkerSuffix(record.parserBuffer, record.startMarker);
+        return;
+      }
+      record.parserBuffer = record.parserBuffer.slice(markerIndex + record.startMarker.length);
+      record.phase = 'capturing';
+    }
+
+    const endIndex = record.parserBuffer.indexOf(record.endPrefix);
+    if (endIndex < 0) {
+      const suffix = this.possibleMarkerSuffix(record.parserBuffer, record.endPrefix);
+      this.appendOutput(record, record.parserBuffer.slice(0, record.parserBuffer.length - suffix.length));
+      record.parserBuffer = suffix;
+      return;
+    }
+
+    this.appendOutput(record, record.parserBuffer.slice(0, endIndex));
+    const markerEnd = record.parserBuffer.indexOf('\x07', endIndex + record.endPrefix.length);
+    if (markerEnd < 0) {
+      record.parserBuffer = record.parserBuffer.slice(endIndex);
+      return;
+    }
+
+    const exitText = record.parserBuffer.slice(endIndex + record.endPrefix.length, markerEnd);
+    if (!/^-?\d+$/.test(exitText)) {
+      // A nonce match with a malformed payload is ordinary command output.
+      this.appendOutput(record, record.parserBuffer.slice(0, markerEnd + 1));
+      record.parserBuffer = record.parserBuffer.slice(markerEnd + 1);
+      return;
+    }
+
+    record.parserBuffer = record.parserBuffer.slice(markerEnd + 1);
+    if (record.status === 'running') {
+      this.finishCommand(record, 'exited', Number(exitText));
+    } else {
+      this.finishCommand(record, record.status, null);
+    }
+  }
+
+  private possibleMarkerSuffix(value: string, marker: string): string {
+    const limit = Math.min(value.length, marker.length - 1);
+    for (let length = limit; length > 0; length -= 1) {
+      if (value.endsWith(marker.slice(0, length))) {
+        return value.slice(-length);
+      }
+    }
+    return '';
+  }
+
+  private appendOutput(record: CommandRecord, value: string): void {
+    record.output += value.replace(ANSI_REGEX, '').replace(/\r\n/g, '\n').replace(/\r/g, '');
+  }
+
+  private forceStopSession(record: CommandRecord): void {
+    if (this.activeCommand !== record || record.status === 'running') {
+      return;
+    }
+    // A foreground process may ignore Ctrl+C. Kill the owning PTY so command
+    // ownership is not released while that process can still consume input.
+    // The next command lazily creates a fresh shell session.
+    this.ptyProcess?.kill('SIGKILL');
+  }
+
+  private finishCommand(record: CommandRecord, status: CommandStatus, exitCode: number | null): void {
+    clearTimeout(record.timer);
+    if (record.interruptTimer) {
+      clearTimeout(record.interruptTimer);
+      record.interruptTimer = undefined;
+    }
+    record.status = status;
+    record.exitCode = exitCode;
+    if (this.activeCommand === record) {
+      this.activeCommand = null;
+      this.isBusy = false;
+    }
+    record.resolve(this.snapshot(record));
+    this.trimHistory();
+  }
+
+  private getCommand(commandId: string): CommandRecord {
+    const record = this.commands.get(commandId);
+    if (!record) {
+      throw new Error(`Unknown or stale command ID: ${commandId}`);
+    }
+    return record;
+  }
+
+  private snapshot(record: CommandRecord, offset: number = 0): CommandSnapshot {
+    const safeOffset = Math.min(offset, record.output.length);
+    return {
+      commandId: record.commandId,
+      command: record.command,
+      status: record.status,
+      output: record.output.slice(safeOffset),
+      nextOffset: record.output.length,
+      exitCode: record.exitCode,
+    };
+  }
+
+  private trimHistory(): void {
+    const completed = [...this.commands.values()].filter((record) => record !== this.activeCommand && record.status !== 'running');
+    while (completed.length > COMPLETED_HISTORY_LIMIT) {
+      const oldest = completed.shift();
+      if (oldest) {
+        this.commands.delete(oldest.commandId);
+      }
+    }
   }
 }

@@ -77,10 +77,37 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
 
 | Tool | Description |
 | :--- | :--- |
-| **`execute_command`** | Executes a shell command in the persistent terminal, streams live output to the browser, and returns the exit code + text output to the AI. |
-| **`send_input`** | Sends raw keystrokes or control sequences (e.g. `y\n` to accept prompts or `\x03` for `Ctrl+C`). |
-| **`start_session`** | Switches or spawns a new terminal session (Local shell `/bin/zsh` or Remote `ssh user@host`). |
-| **`get_session_status`**| Inspects the active terminal session, PID, and dimensions. |
+| **`execute_command`** | Starts a command and blocks until its explicit lifecycle marker reports the real exit code, or until the safety timeout. |
+| **`start_command`** | Starts an interactive foreground command and immediately returns its unique `commandId`. |
+| **`poll_command`** | Returns command state and output after an absolute character `offset`. |
+| **`send_input`** | Sends input only to the running command identified by `command_id`; stale, unknown, and exited IDs are rejected. |
+| **`cancel_command`** | Cancels the running command identified by `command_id` with `Ctrl+C`. |
+| **`start_session`** | Switches or spawns a new terminal session (local POSIX shell or remote SSH shell). |
+| **`get_session_status`**| Inspects the active terminal session, PID, busy state, and dimensions. |
+
+Only one foreground command can own a PTY at a time. Completed command state is retained in a bounded 20-command history. Local and SSH command lifecycle tracking requires a POSIX-compatible shell with `printf`, `eval`, and `base64 -d`. Cancellation sends `Ctrl+C`; if a process ignores it, Interminal kills that PTY before releasing ownership, and the next command starts a fresh shell session.
+
+### Blocking commands
+
+Use `execute_command` for commands that need no agent input:
+
+```json
+{"command":"node scripts/sleep.js 5","timeout_ms":10000}
+```
+
+The call returns only after the command exits (or times out), includes output such as `You'd slept for 5 seconds`, and reports the shell's real `exitCode` and lifecycle `status`.
+
+### Interactive commands
+
+MCP is request/response based, so interactive work uses several short calls over server-managed command state:
+
+1. `start_command({"command":"node scripts/prompt.js"})` and save the returned `commandId`.
+2. `poll_command({"command_id":"<id>","offset":0})` until the name prompt appears; save `nextOffset`.
+3. `send_input({"command_id":"<id>","input":"Alice\n"})`.
+4. Poll from the saved offset until the age prompt, then send `30\n` with the same ID.
+5. Poll until `status` is `exited`; the final output contains `Your name is Alice and you are 30 years old.`
+
+Use each response's `nextOffset` for the next poll to avoid receiving output twice. `timeout_ms` is a safety boundary, not an idle-output completion heuristic.
 
 ---
 
