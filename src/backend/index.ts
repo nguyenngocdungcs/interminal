@@ -1,4 +1,17 @@
 import os from 'os';
+import { execFileSync } from 'child_process';
+
+// Hermes filters SSH_AUTH_SOCK from MCP subprocess environments.
+// Fetch it from launchd (the canonical macOS source) so every child PTY
+// inherits the SSH agent socket without manual ssh-add workarounds.
+if (!process.env.SSH_AUTH_SOCK && process.platform === 'darwin') {
+  try {
+    const sock = execFileSync('launchctl', ['getenv', 'SSH_AUTH_SOCK'], { encoding: 'utf8', timeout: 2000 }).trim();
+    if (sock) {
+      process.env.SSH_AUTH_SOCK = sock;
+    }
+  } catch { /* launchctl not available or no SSH agent */ }
+}
 
 // Safeguard against ENOENT: uv_cwd if Hermes or the parent process was spawned from a deleted/invalid cwd
 try {
