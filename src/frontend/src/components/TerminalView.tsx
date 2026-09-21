@@ -59,6 +59,20 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
+
+    // Support Cmd + K (Mac) / Ctrl + K to clear the terminal screen & buffer
+    term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type === 'keydown' && (event.metaKey || (event.ctrlKey && event.shiftKey)) && (event.key === 'k' || event.key === 'K')) {
+        event.preventDefault();
+        term.clear();
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'input', data: '\x0c' }));
+        }
+        return false;
+      }
+      return true;
+    });
+
     term.open(containerRef.current);
     fitAddon.fit();
 
