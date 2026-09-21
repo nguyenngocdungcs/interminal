@@ -132,7 +132,7 @@ export class TerminalMcpServer {
   private jsonResponse(payload: unknown, isError = false) {
     return {
       ...(isError ? { isError: true } : {}),
-      content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+      content: [{ type: 'text' as const, text: JSON.stringify(payload) }],
     };
   }
 
