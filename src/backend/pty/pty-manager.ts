@@ -112,6 +112,7 @@ export class PtyManager extends EventEmitter {
       if (this.ptyProcess !== sessionPty) {
         return;
       }
+      console.log('[node-pty output]:', JSON.stringify(data));
       this.emitWebUiData(data);
       if (this.activeCommand) {
         this.consumeCommandData(this.activeCommand, data);
