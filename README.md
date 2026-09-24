@@ -77,37 +77,40 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
 
 | Tool | Description |
 | :--- | :--- |
-| **`execute_command`** | Starts a command and blocks until its explicit lifecycle marker reports the real exit code, or until the safety timeout. |
-| **`start_command`** | Starts an interactive foreground command and immediately returns its unique `commandId`. |
-| **`poll_command`** | Returns command state and output after an absolute character `offset`. |
-| **`send_input`** | Sends input only to the running command identified by `command_id`; stale, unknown, and exited IDs are rejected. |
-| **`cancel_command`** | Cancels the running command identified by `command_id` with `Ctrl+C`. |
+| **`write_to_terminal`** | Writes commands, interactive prompt responses, single keystrokes, or control codes (`\x03` for Ctrl+C). Defaults to auto-appending newline (`auto_enter: true`). |
+| **`read_terminal`** | Reads clean plain-text terminal scrollback using cursor-based pagination (capped at 500 lines per call) with `has_more` indicators. |
 | **`start_session`** | Switches or spawns a new terminal session (local POSIX shell or remote SSH shell). |
 | **`get_session_status`**| Inspects the active terminal session, PID, busy state, and dimensions. |
 
-Only one foreground command can own a PTY at a time. Completed command state is retained in a bounded 20-command history. Local and SSH command lifecycle tracking requires a POSIX-compatible shell with `printf`, `eval`, and `base64 -d`. Cancellation sends `Ctrl+C`; if a process ignores it, Interminal kills that PTY before releasing ownership, and the next command starts a fresh shell session.
+### Running Commands & Reading Output
 
-### Blocking commands
+1. **Send command:**
+   ```json
+   { "input": "npm test" }
+   ```
+   *Note: `auto_enter` is `true` by default, executing the command immediately.*
 
-Use `execute_command` for commands that need no agent input:
+2. **Poll output:**
+   ```json
+   { "cursor": 0, "limit": 500 }
+   ```
+   Returns:
+   ```json
+   {
+     "text": "> interminal@0.1.0 test\n...",
+     "cursor": 42,
+     "has_more": false,
+     "total_lines": 42,
+     "session": { "pid": 12345, "isBusy": false, "sessionType": "local" }
+   }
+   ```
+   To continue reading subsequent output, provide the returned `cursor` in the next call: `{"cursor": 42}`. The returned `cursor` matches the index of the last line in the batch so the active shell prompt and any typed commands on that line are seamlessly captured.
 
-```json
-{"command":"node scripts/sleep.js 5","timeout_ms":10000}
-```
+3. **Interactive Prompts:**
+   Send answers with the same tool: `{"input": "Alice"}` (auto-appends `\n`).
 
-The call returns only after the command exits (or times out), includes output such as `You'd slept for 5 seconds`, and reports the shell's real `exitCode` and lifecycle `status`.
-
-### Interactive commands
-
-MCP is request/response based, so interactive work uses several short calls over server-managed command state:
-
-1. `start_command({"command":"node scripts/prompt.js"})` and save the returned `commandId`.
-2. `poll_command({"command_id":"<id>","offset":0})` until the name prompt appears; save `nextOffset`.
-3. `send_input({"command_id":"<id>","input":"Alice\n"})`.
-4. Poll from the saved offset until the age prompt, then send `30\n` with the same ID.
-5. Poll until `status` is `exited`; the final output contains `Your name is Alice and you are 30 years old.`
-
-Use each response's `nextOffset` for the next poll to avoid receiving output twice. `timeout_ms` is a safety boundary, not an idle-output completion heuristic.
+4. **Canceling or Interrupting (`Ctrl+C`):**
+   Send interrupt control byte: `{"input": "\x03", "auto_enter": false}`.
 
 ---
 
@@ -120,8 +123,8 @@ flowchart TD
     end
 
     subgraph Interminal ["Interminal Backend (Port 3010)"]
-        MCP["MCP Stdio Server\n(Zero-latency Handshake)"]
-        PTY["Persistent Shell Engine\n(node-pty)"]
+        MCP["MCP Stdio Server\n(Observer API)"]
+        PTY["Persistent Shell Engine\n(node-pty + Rolling Buffer)"]
         WebBridge["Fastify Web & WebSocket Server"]
     end
 
@@ -140,8 +143,6 @@ flowchart TD
 ---
 
 ## 👩‍💻 Development
-
-Want to customize or develop Interminal?
 
 - **Run backend with hot-reload:** `npm run dev:backend`
 - **Run frontend Vite dev server:** `npm run dev:frontend`

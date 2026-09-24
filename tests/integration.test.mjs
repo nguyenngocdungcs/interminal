@@ -1,6 +1,7 @@
 import { PtyManager } from '../src/backend/pty/pty-manager.js';
 import { WebServer } from '../src/backend/server/web-server.js';
 import WebSocket from 'ws';
+import assert from 'node:assert/strict';
 
 async function test() {
   console.log('--- Starting Integration Test: PtyManager + WebServer + WebSocket ---');
@@ -16,13 +17,11 @@ async function test() {
   // 1. Connect WebSocket client (simulating browser)
   const ws = new WebSocket(`ws://localhost:${testPort}/ws`);
 
-  let receivedOutputChunks = [];
-  let connectionOpen = false;
+  const receivedOutputChunks = [];
 
   await new Promise((resolve, reject) => {
     ws.on('open', () => {
       console.log('WebSocket client connected successfully!');
-      connectionOpen = true;
       resolve();
     });
     ws.on('error', reject);
@@ -39,21 +38,21 @@ async function test() {
     }
   });
 
-  // 2. Execute command via PTY manager (simulating MCP tool call)
+  // 2. Execute command via PTY manager writeToTerminal
   console.log('\n[Integration Test] Executing command via backend: echo "WS_STREAM_TEST"');
-  const result = await ptyManager.executeCommand('echo "WS_STREAM_TEST"');
-
-  console.log('MCP Execution result exitCode:', result.exitCode);
-  console.log('MCP Execution result output contains expected text:', result.output.includes('WS_STREAM_TEST'));
+  const initial = ptyManager.readTerminal();
+  ptyManager.writeToTerminal('echo "WS_STREAM_TEST"');
 
   // Wait a moment for WS stream
-  await new Promise((r) => setTimeout(r, 500));
+  await new Promise((r) => setTimeout(r, 600));
+
+  const readResult = ptyManager.readTerminal({ cursor: initial.cursor });
+  assert.ok(readResult.text.includes('WS_STREAM_TEST'), 'readTerminal should contain echo output');
 
   const totalWsText = receivedOutputChunks.join('');
   const wsReceivedText = totalWsText.includes('WS_STREAM_TEST');
-  const wsHasNoWrappedNoise = !totalWsText.includes('base64 -d') && !totalWsText.includes('eval "$(');
   console.log('WebSocket stream received live chunks:', wsReceivedText);
-  console.log('WebSocket stream suppressed command wrapper noise:', wsHasNoWrappedNoise);
+  assert.ok(wsReceivedText, 'WebSocket should receive live streaming output');
 
   // 3. Test sending human keystroke from WebSocket client to PTY
   console.log('\n[Integration Test] Testing manual human input via WebSocket');
@@ -62,21 +61,17 @@ async function test() {
     data: 'echo "INPUT_FROM_WS"\n'
   }));
 
-  await new Promise((r) => setTimeout(r, 1000));
+  await new Promise((r) => setTimeout(r, 800));
   const wsReceivedManualInput = receivedOutputChunks.join('').includes('INPUT_FROM_WS');
   console.log('Manual input reflected in terminal stream:', wsReceivedManualInput);
+  assert.ok(wsReceivedManualInput, 'Manual input via WebSocket should be reflected in output');
 
   // Cleanup
   ws.close();
   await webServer.stop();
 
-  if (result.exitCode === 0 && wsReceivedText && wsHasNoWrappedNoise && wsReceivedManualInput) {
-    console.log('\n🎉 ALL INTEGRATION TESTS PASSED!');
-    process.exit(0);
-  } else {
-    console.error('\n❌ Integration test failed assertions.');
-    process.exit(1);
-  }
+  console.log('\n🎉 ALL INTEGRATION TESTS PASSED!');
+  process.exit(0);
 }
 
 test().catch((err) => {

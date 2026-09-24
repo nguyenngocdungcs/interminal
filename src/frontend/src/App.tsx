@@ -31,7 +31,7 @@ export const App: React.FC = () => {
 
           {status?.pid && status.pid !== -1 && (
             <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-slate-800/80 border border-slate-700/60 text-slate-400 font-mono text-[11px]">
-              <Activity size={12} className={status?.isBusy ? "text-amber-400 animate-pulse" : "text-emerald-400"} />
+              <Activity size={12} className="text-emerald-400" />
               <span>PID: {status.pid}</span>
               <span className="text-slate-600">|</span>
               <span>{status?.cols}x{status?.rows}</span>

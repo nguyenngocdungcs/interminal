@@ -1,67 +1,55 @@
 import * as pty from 'node-pty';
-import { randomBytes, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
 export type SessionType = 'local' | 'ssh';
-export type CommandStatus = 'running' | 'exited' | 'timed_out' | 'cancelled';
 
 export interface SessionStatus {
   sessionType: SessionType;
   target?: string;
   pid: number;
-  isBusy: boolean;
   cols: number;
   rows: number;
 }
 
-export interface CommandSnapshot {
-  commandId: string;
-  command: string;
-  status: CommandStatus;
-  output: string;
-  nextOffset: number;
-  exitCode: number | null;
+export interface ReadTerminalOptions {
+  cursor?: number;
+  limit?: number;
 }
 
-export type CommandResult = CommandSnapshot;
-
-interface CommandRecord {
-  commandId: string;
-  command: string;
-  nonce: string;
-  startMarker: string;
-  endPrefix: string;
-  phase: 'awaiting_start' | 'capturing';
-  parserBuffer: string;
-  output: string;
-  status: CommandStatus;
-  exitCode: number | null;
-  timer: NodeJS.Timeout;
-  interruptTimer?: NodeJS.Timeout;
-  resolve: (result: CommandResult) => void;
-  completion: Promise<CommandResult>;
-  webUiBuffer?: string;
-  webUiStarted?: boolean;
+export interface ReadTerminalResult {
+  text: string;
+  cursor: number;
+  has_more: boolean;
+  total_lines: number;
+  session: SessionStatus;
 }
 
-const COMPLETED_HISTORY_LIMIT = 20;
-const CANCEL_GRACE_MS = 1000;
-const ANSI_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const MAX_BUFFER_LINES = 5000;
+const MAX_BUFFER_CHARS = 1000000;
+const MAX_PAGE_LIMIT = 500;
+
+// ANSI and control sequence patterns (OSC, CSI, character set, and single-char escapes)
+const ANSI_REGEX = /\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|\([A-Z0-9]|[@-Z\\-_])/g;
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI_REGEX, '');
+}
 
 export class PtyManager extends EventEmitter {
   private ptyProcess: pty.IPty | null = null;
   private sessionType: SessionType = 'local';
   private target?: string;
-  private isBusy = false;
   private cols = 80;
   private rows = 24;
-  private activeCommand: CommandRecord | null = null;
-  private commands = new Map<string, CommandRecord>();
+
+  // Rolling line buffer
+  private lines: string[] = [];
+  private currentLine = '';
+  private startLineIndex = 0; // Absolute offset of the oldest line in the buffer
+  private totalChars = 0;
+  private hasPendingCR = false;
 
   public spawnSession(type: SessionType = 'local', target?: string): SessionStatus {
-    if (this.activeCommand) {
-      this.finishCommand(this.activeCommand, 'cancelled', null);
-    }
     if (this.ptyProcess) {
       try {
         this.ptyProcess.kill();
@@ -73,6 +61,7 @@ export class PtyManager extends EventEmitter {
 
     this.sessionType = type;
     this.target = target;
+    this.resetBuffer();
 
     const shell = process.platform === 'win32'
       ? 'powershell.exe'
@@ -112,11 +101,8 @@ export class PtyManager extends EventEmitter {
       if (this.ptyProcess !== sessionPty) {
         return;
       }
-      console.log('[node-pty output]:', JSON.stringify(data));
-      this.emitWebUiData(data);
-      if (this.activeCommand) {
-        this.consumeCommandData(this.activeCommand, data);
-      }
+      this.emit('data', data);
+      this.appendRawData(data);
     });
 
     sessionPty.onExit(({ exitCode, signal }) => {
@@ -124,18 +110,7 @@ export class PtyManager extends EventEmitter {
         return;
       }
       this.emit('exit', { exitCode, signal });
-      if (this.activeCommand) {
-        const record = this.activeCommand;
-        this.appendOutput(record, record.parserBuffer);
-        record.parserBuffer = '';
-        this.finishCommand(
-          record,
-          record.status === 'running' ? 'exited' : record.status,
-          record.status === 'running' ? (exitCode ?? -1) : null,
-        );
-      }
       this.ptyProcess = null;
-      this.isBusy = false;
     });
 
     return this.getStatus();
@@ -143,6 +118,54 @@ export class PtyManager extends EventEmitter {
 
   public write(data: string): void {
     this.ptyProcess?.write(data);
+  }
+
+  public writeToTerminal(input: string, autoEnter = true): void {
+    if (!this.ptyProcess) {
+      this.spawnSession(this.sessionType, this.target);
+    }
+    const formatted = autoEnter && !/[\r\n]$/.test(input) ? `${input}\n` : input;
+    this.write(formatted);
+  }
+
+  public readTerminal(options: ReadTerminalOptions = {}): ReadTerminalResult {
+    const allLines = this.getAllLines();
+    const totalLines = this.startLineIndex + allLines.length;
+    const requestedLimit = typeof options.limit === 'number' && options.limit > 0
+      ? Math.min(options.limit, MAX_PAGE_LIMIT)
+      : MAX_PAGE_LIMIT;
+
+    let cursor = typeof options.cursor === 'number' && Number.isInteger(options.cursor) && options.cursor >= 0
+      ? options.cursor
+      : this.startLineIndex;
+
+    // If requested cursor is before the oldest retained line, clamp to startLineIndex
+    if (cursor < this.startLineIndex) {
+      cursor = this.startLineIndex;
+    }
+
+    if (cursor >= totalLines) {
+      return {
+        text: '',
+        cursor: Math.max(0, totalLines - 1),
+        has_more: false,
+        total_lines: totalLines,
+        session: this.getStatus(),
+      };
+    }
+
+    const relativeStart = cursor - this.startLineIndex;
+    const batch = allLines.slice(relativeStart, relativeStart + requestedLimit);
+    const lastLineIndex = cursor + Math.max(0, batch.length - 1);
+    const hasMore = (relativeStart + batch.length) < allLines.length;
+
+    return {
+      text: batch.join('\n'),
+      cursor: lastLineIndex,
+      has_more: hasMore,
+      total_lines: totalLines,
+      session: this.getStatus(),
+    };
   }
 
   public resize(cols: number, rows: number): void {
@@ -157,255 +180,99 @@ export class PtyManager extends EventEmitter {
     }
   }
 
-  public startCommand(command: string, timeoutMs: number = 60000): CommandSnapshot {
-    if (process.platform === 'win32') {
-      throw new Error('Command lifecycle markers currently require a POSIX-compatible shell.');
-    }
-    if (!this.ptyProcess) {
-      this.spawnSession(this.sessionType, this.target);
-    }
-    if (this.activeCommand) {
-      throw new Error('Another command is currently executing.');
-    }
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      throw new Error('timeoutMs must be a positive number.');
-    }
-
-    const commandId = randomUUID();
-    const nonce = randomBytes(24).toString('hex');
-    const startMarker = `\x1b]777;interminal;${nonce};start\x07`;
-    const endPrefix = `\x1b]777;interminal;${nonce};end;`;
-    let resolve!: (result: CommandResult) => void;
-    const completion = new Promise<CommandResult>((done) => {
-      resolve = done;
-    });
-    const record: CommandRecord = {
-      commandId,
-      command,
-      nonce,
-      startMarker,
-      endPrefix,
-      phase: 'awaiting_start',
-      parserBuffer: '',
-      output: '',
-      status: 'running',
-      exitCode: null,
-      timer: setTimeout(() => {
-        if (record.status === 'running') {
-          record.status = 'timed_out';
-          record.exitCode = null;
-          this.write('\x03');
-          record.interruptTimer = setTimeout(() => {
-            this.forceStopSession(record);
-          }, CANCEL_GRACE_MS);
-        }
-      }, timeoutMs),
-      resolve,
-      completion,
-    };
-
-    this.activeCommand = record;
-    this.commands.set(commandId, record);
-    this.isBusy = true;
-    this.trimHistory();
-    this.write(this.wrapCommand(command, record));
-    return this.snapshot(record);
-  }
-
-  public pollCommand(commandId: string, offset: number = 0): CommandSnapshot {
-    const record = this.getCommand(commandId);
-    if (!Number.isInteger(offset) || offset < 0) {
-      throw new Error('offset must be a non-negative integer.');
-    }
-    return this.snapshot(record, offset);
-  }
-
-  public sendInput(commandId: string, input: string): CommandSnapshot {
-    const record = this.getCommand(commandId);
-    if (record !== this.activeCommand || record.status !== 'running') {
-      throw new Error(`Command ${commandId} is not running and cannot receive input.`);
-    }
-    const formattedInput = input.endsWith('\n') || input.endsWith('\r') ? input : `${input}\n`;
-    this.write(formattedInput);
-    return this.snapshot(record);
-  }
-
-  public async cancelCommand(commandId: string): Promise<CommandSnapshot> {
-    const record = this.getCommand(commandId);
-    if (record !== this.activeCommand || record.status !== 'running') {
-      throw new Error(`Command ${commandId} is not running and cannot be cancelled.`);
-    }
-    record.status = 'cancelled';
-    record.exitCode = null;
-    clearTimeout(record.timer);
-    this.write('\x03');
-    record.interruptTimer = setTimeout(() => {
-      this.forceStopSession(record);
-    }, CANCEL_GRACE_MS);
-    return record.completion;
-  }
-
-  public waitForCommand(commandId: string): Promise<CommandResult> {
-    return this.getCommand(commandId).completion;
-  }
-
-  public async executeCommand(command: string, timeoutMs: number = 60000): Promise<CommandResult> {
-    const started = this.startCommand(command, timeoutMs);
-    return this.waitForCommand(started.commandId);
-  }
-
   public getStatus(): SessionStatus {
     return {
       sessionType: this.sessionType,
       target: this.target,
       pid: this.ptyProcess?.pid ?? -1,
-      isBusy: this.isBusy,
       cols: this.cols,
       rows: this.rows,
     };
   }
 
-  private wrapCommand(command: string, record: CommandRecord): string {
-    const encoded = Buffer.from(command, 'utf8').toString('base64');
-    const start = `\\033]777;interminal;${record.nonce};start\\007`;
-    const end = `\\033]777;interminal;${record.nonce};end;%s\\007`;
-    return `printf '${start}'; eval "$(printf '%s' '${encoded}' | base64 -d)"; __interminal_ec=$?; printf '${end}' "$__interminal_ec"\n`;
+  private resetBuffer(): void {
+    this.lines = [];
+    this.currentLine = '';
+    this.startLineIndex = 0;
+    this.totalChars = 0;
+    this.hasPendingCR = false;
   }
 
-  private consumeCommandData(record: CommandRecord, data: string): void {
-    record.parserBuffer += data;
+  private getAllLines(): string[] {
+    return this.currentLine ? [...this.lines, this.currentLine] : this.lines;
+  }
 
-    if (record.phase === 'awaiting_start') {
-      const markerIndex = record.parserBuffer.indexOf(record.startMarker);
-      if (markerIndex < 0) {
-        record.parserBuffer = this.possibleMarkerSuffix(record.parserBuffer, record.startMarker);
-        return;
+  public appendRawData(data: string): void {
+    const clean = stripAnsi(data);
+    let i = 0;
+    while (i < clean.length) {
+      const ch = clean[i];
+
+      if (ch === '\r') {
+        // Check if this \r is part of a newline sequence (\r+\n)
+        let crCount = 0;
+        while (i + crCount < clean.length && clean[i + crCount] === '\r') {
+          crCount++;
+        }
+        if (i + crCount < clean.length && clean[i + crCount] === '\n') {
+          // We have \r+\n in the current chunk -> it's a newline
+          this.hasPendingCR = false;
+          this.commitLine();
+          i += crCount + 1;
+          continue;
+        } else if (i + crCount === clean.length) {
+          // \r reaches the end of the chunk; hold as pending CR in case next chunk starts with \n
+          this.hasPendingCR = true;
+          i += crCount;
+          continue;
+        } else {
+          // Standalone \r followed by non-newline characters in the same chunk -> overwrite current line
+          this.currentLine = '';
+          this.hasPendingCR = false;
+          i += crCount;
+          continue;
+        }
       }
-      record.parserBuffer = record.parserBuffer.slice(markerIndex + record.startMarker.length);
-      record.phase = 'capturing';
-    }
 
-    const endIndex = record.parserBuffer.indexOf(record.endPrefix);
-    if (endIndex < 0) {
-      const suffix = this.possibleMarkerSuffix(record.parserBuffer, record.endPrefix);
-      this.appendOutput(record, record.parserBuffer.slice(0, record.parserBuffer.length - suffix.length));
-      record.parserBuffer = suffix;
-      return;
-    }
+      if (ch === '\n') {
+        this.hasPendingCR = false;
+        this.commitLine();
+        i += 1;
+        continue;
+      }
 
-    this.appendOutput(record, record.parserBuffer.slice(0, endIndex));
-    const markerEnd = record.parserBuffer.indexOf('\x07', endIndex + record.endPrefix.length);
-    if (markerEnd < 0) {
-      record.parserBuffer = record.parserBuffer.slice(endIndex);
-      return;
-    }
+      // Normal character (or \b backspace)
+      if (this.hasPendingCR) {
+        // We had a pending \r from the end of previous chunk, and current character is NOT \n or \r
+        // So that was a true standalone \r (overwrite)
+        this.currentLine = '';
+        this.hasPendingCR = false;
+      }
 
-    const exitText = record.parserBuffer.slice(endIndex + record.endPrefix.length, markerEnd);
-    if (!/^-?\d+$/.test(exitText)) {
-      // A nonce match with a malformed payload is ordinary command output.
-      this.appendOutput(record, record.parserBuffer.slice(0, markerEnd + 1));
-      record.parserBuffer = record.parserBuffer.slice(markerEnd + 1);
-      return;
-    }
-
-    record.parserBuffer = record.parserBuffer.slice(markerEnd + 1);
-    if (record.status === 'running') {
-      this.finishCommand(record, 'exited', Number(exitText));
-    } else {
-      this.finishCommand(record, record.status, null);
-    }
-  }
-
-  private possibleMarkerSuffix(value: string, marker: string): string {
-    const limit = Math.min(value.length, marker.length - 1);
-    for (let length = limit; length > 0; length -= 1) {
-      if (value.endsWith(marker.slice(0, length))) {
-        return value.slice(-length);
+      if (ch === '\b') {
+        this.currentLine = this.currentLine.slice(0, -1);
+        i += 1;
+      } else {
+        this.currentLine += ch;
+        i += 1;
       }
     }
-    return '';
+
+    this.trimBuffer();
   }
 
-  private appendOutput(record: CommandRecord, value: string): void {
-    record.output += value.replace(ANSI_REGEX, '').replace(/\r\n/g, '\n').replace(/\r/g, '');
+  private commitLine(): void {
+    this.lines.push(this.currentLine);
+    this.totalChars += this.currentLine.length + 1;
+    this.currentLine = '';
   }
 
-  private forceStopSession(record: CommandRecord): void {
-    if (this.activeCommand !== record || record.status === 'running') {
-      return;
-    }
-    // A foreground process may ignore Ctrl+C. Kill the owning PTY so command
-    // ownership is not released while that process can still consume input.
-    // The next command lazily creates a fresh shell session.
-    this.ptyProcess?.kill('SIGKILL');
-  }
-
-  private finishCommand(record: CommandRecord, status: CommandStatus, exitCode: number | null): void {
-    clearTimeout(record.timer);
-    if (record.interruptTimer) {
-      clearTimeout(record.interruptTimer);
-      record.interruptTimer = undefined;
-    }
-    if (record.webUiBuffer && !record.webUiStarted) {
-      this.emit('data', record.webUiBuffer);
-      record.webUiBuffer = '';
-    }
-    record.status = status;
-    record.exitCode = exitCode;
-    if (this.activeCommand === record) {
-      this.activeCommand = null;
-      this.isBusy = false;
-    }
-    record.resolve(this.snapshot(record));
-    this.trimHistory();
-  }
-
-  private emitWebUiData(data: string): void {
-    const record = this.activeCommand;
-    if (!record || record.webUiStarted) {
-      this.emit('data', data);
-      return;
-    }
-
-    record.webUiBuffer = (record.webUiBuffer || '') + data;
-    const markerIndex = record.webUiBuffer.indexOf(record.startMarker);
-    if (markerIndex < 0) {
-      return;
-    }
-
-    record.webUiStarted = true;
-    const remaining = record.webUiBuffer.slice(markerIndex);
-    record.webUiBuffer = '';
-    const formattedCommand = record.command.replace(/\r?\n/g, '\r\n');
-    this.emit('data', `${formattedCommand}\r\n${remaining}`);
-  }
-
-  private getCommand(commandId: string): CommandRecord {
-    const record = this.commands.get(commandId);
-    if (!record) {
-      throw new Error(`Unknown or stale command ID: ${commandId}`);
-    }
-    return record;
-  }
-
-  private snapshot(record: CommandRecord, offset: number = 0): CommandSnapshot {
-    const safeOffset = Math.min(offset, record.output.length);
-    return {
-      commandId: record.commandId,
-      command: record.command,
-      status: record.status,
-      output: record.output.slice(safeOffset),
-      nextOffset: record.output.length,
-      exitCode: record.exitCode,
-    };
-  }
-
-  private trimHistory(): void {
-    const completed = [...this.commands.values()].filter((record) => record !== this.activeCommand && record.status !== 'running');
-    while (completed.length > COMPLETED_HISTORY_LIMIT) {
-      const oldest = completed.shift();
-      if (oldest) {
-        this.commands.delete(oldest.commandId);
+  private trimBuffer(): void {
+    while (this.lines.length > MAX_BUFFER_LINES || (this.totalChars > MAX_BUFFER_CHARS && this.lines.length > 1)) {
+      const removed = this.lines.shift();
+      if (removed !== undefined) {
+        this.totalChars -= (removed.length + 1);
+        this.startLineIndex += 1;
       }
     }
   }
