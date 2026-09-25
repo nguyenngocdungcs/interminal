@@ -29,7 +29,6 @@ export class TerminalMcpServer {
           this.ptyManager.writeToTerminal(input, auto_enter);
           return this.jsonResponse({
             success: true,
-            session: this.ptyManager.getStatus(),
           });
         } catch (error) {
           return this.errorResponse(error);

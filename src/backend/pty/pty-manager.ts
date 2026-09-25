@@ -21,7 +21,6 @@ export interface ReadTerminalResult {
   cursor: number;
   has_more: boolean;
   total_lines: number;
-  session: SessionStatus;
 }
 
 const MAX_BUFFER_LINES = 5000;
@@ -150,7 +149,6 @@ export class PtyManager extends EventEmitter {
         cursor: Math.max(0, totalLines - 1),
         has_more: false,
         total_lines: totalLines,
-        session: this.getStatus(),
       };
     }
 
@@ -164,7 +162,6 @@ export class PtyManager extends EventEmitter {
       cursor: lastLineIndex,
       has_more: hasMore,
       total_lines: totalLines,
-      session: this.getStatus(),
     };
   }
 

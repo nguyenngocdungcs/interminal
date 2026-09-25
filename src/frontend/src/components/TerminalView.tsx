@@ -104,7 +104,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
     ws.onclose = () => {
       onConnectionChange?.(false);
-      term.writeln('\r\n\x1b[31m[Interminal] Connection to backend lost. Reconnecting...\x1b[0m');
+      term.writeln('\r\n\x1b[31m[Interminal] Connection to backend lost. Refresh the page to reconnect.\x1b[0m');
     };
 
     ws.onerror = () => {

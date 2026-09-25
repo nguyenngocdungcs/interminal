@@ -1,6 +1,5 @@
 import { PtyManager } from '../src/backend/pty/pty-manager.js';
 import { WebServer } from '../src/backend/server/web-server.js';
-import WebSocket from 'ws';
 import assert from 'node:assert/strict';
 
 async function test() {
@@ -20,23 +19,23 @@ async function test() {
   const receivedOutputChunks = [];
 
   await new Promise((resolve, reject) => {
-    ws.on('open', () => {
+    ws.onopen = () => {
       console.log('WebSocket client connected successfully!');
       resolve();
-    });
-    ws.on('error', reject);
+    };
+    ws.onerror = reject;
   });
 
-  ws.on('message', (data) => {
+  ws.onmessage = (event) => {
     try {
-      const msg = JSON.parse(data.toString());
+      const msg = JSON.parse(event.data.toString());
       if (msg.type === 'output') {
         receivedOutputChunks.push(msg.data);
       }
     } catch (e) {
-      receivedOutputChunks.push(data.toString());
+      receivedOutputChunks.push(event.data.toString());
     }
-  });
+  };
 
   // 2. Execute command via PTY manager writeToTerminal
   console.log('\n[Integration Test] Executing command via backend: echo "WS_STREAM_TEST"');

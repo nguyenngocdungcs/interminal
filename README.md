@@ -100,8 +100,7 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
      "text": "> interminal@0.1.0 test\n...",
      "cursor": 42,
      "has_more": false,
-     "total_lines": 42,
-     "session": { "pid": 12345, "isBusy": false, "sessionType": "local" }
+     "total_lines": 42
    }
    ```
    To continue reading subsequent output, provide the returned `cursor` in the next call: `{"cursor": 42}`. The returned `cursor` matches the index of the last line in the batch so the active shell prompt and any typed commands on that line are seamlessly captured.

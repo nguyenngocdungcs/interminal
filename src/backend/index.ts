@@ -1,5 +1,8 @@
 import os from 'os';
 import { execFileSync } from 'child_process';
+import { PtyManager } from './pty/pty-manager.js';
+import { TerminalMcpServer } from './mcp/server.js';
+import { WebServer } from './server/web-server.js';
 
 // Hermes filters SSH_AUTH_SOCK from MCP subprocess environments.
 // Fetch it from launchd (the canonical macOS source) so every child PTY
@@ -24,15 +27,7 @@ try {
   }
 }
 
-export async function getModules() {
-  const { PtyManager } = await import('./pty/pty-manager.js');
-  const { TerminalMcpServer } = await import('./mcp/server.js');
-  const { WebServer } = await import('./server/web-server.js');
-  return { PtyManager, TerminalMcpServer, WebServer };
-}
-
 async function main() {
-  const { PtyManager, TerminalMcpServer, WebServer } = await getModules();
   const webPort = parseInt(process.env.PORT || '3010', 10);
 
   // 1. Initialize PTY Manager & spawn default local shell

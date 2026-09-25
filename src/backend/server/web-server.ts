@@ -1,11 +1,10 @@
 import Fastify, { FastifyInstance } from 'fastify';
-import fastifyWebsocket from '@fastify/websocket';
+import fastifyWebsocket, { type WebSocket } from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { PtyManager } from '../pty/pty-manager.js';
-import type { WebSocket } from 'ws';
 
 export class WebServer {
   private app: FastifyInstance;

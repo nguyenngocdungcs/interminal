@@ -15,7 +15,6 @@
     "dev:frontend": "vite",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "start": "node dist/backend/index.js",
-    "start:mcp": "node dist/backend/index.js --mcp",
     "test": "tsx tests/pty.test.mjs && tsx tests/terminal-observer.test.mjs && tsx tests/mcp-tools.test.mjs && tsx tests/integration.test.mjs",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
   },
@@ -40,14 +39,12 @@
     "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "ws": "^8.18.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "@types/ws": "^8.5.14",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
