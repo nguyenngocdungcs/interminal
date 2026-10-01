@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { PtyManager, stripAnsi } from '../src/backend/pty/pty-manager.js';
+import { TerminalHistory } from '../src/backend/pty/terminal-history.js';
 
 async function waitForOutput(manager, predicate, cursor = 0, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -140,6 +141,24 @@ async function testExactCursorIndex() {
   console.log('  -> Exact cursor indexing: PASS');
 }
 
+async function testTerminalHistoryDirect() {
+  console.log('[Test 7] TerminalHistory object direct operations (append, read, reset, stats)');
+  const history = new TerminalHistory({ maxLines: 50 });
+  
+  history.append('First line\nSecond line\nPartial line');
+  const read1 = history.read({ limit: 2 });
+  assert.equal(read1.text, 'First line\nSecond line');
+  assert.equal(read1.cursor, 1);
+  assert.equal(read1.has_more, true);
+  assert.equal(history.getTotalLines(), 3);
+
+  history.reset();
+  assert.equal(history.getTotalLines(), 0);
+  const readAfterReset = history.read();
+  assert.equal(readAfterReset.text, '');
+  console.log('  -> TerminalHistory direct operations: PASS');
+}
+
 async function runAll() {
   console.log('--- Starting Terminal Observer Tests ---');
   await testWriteAndReadBasic();
@@ -148,6 +167,7 @@ async function runAll() {
   await testRollingBufferEviction();
   await testControlInterrupt();
   await testExactCursorIndex();
+  await testTerminalHistoryDirect();
   console.log('\n--- All Terminal Observer Tests Passed! ---');
   process.exit(0);
 }
