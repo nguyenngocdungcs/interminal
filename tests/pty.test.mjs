@@ -23,7 +23,7 @@ async function test() {
   console.log('--- Starting PTY Manager Tests ---');
   const pty = new PtyManager();
   
-  const status = pty.spawnSession('local');
+  const status = pty.spawnSession();
   console.log('Spawned session PID:', status.pid);
   assert.ok(status.pid > 0, 'session PID should be positive');
 
@@ -50,7 +50,7 @@ async function test() {
 
   // Test 3: Session re-spawn
   console.log('\n[Test 3] Session re-spawn');
-  const newStatus = pty.spawnSession('local');
+  const newStatus = pty.spawnSession();
   assert.ok(newStatus.pid > 0);
   assert.notEqual(newStatus.pid, status.pid, 'new session must have a new PID');
 

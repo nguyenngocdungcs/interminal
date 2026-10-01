@@ -6,7 +6,7 @@ async function test() {
   console.log('--- Starting Integration Test: PtyManager + WebServer + WebSocket ---');
   
   const ptyManager = new PtyManager();
-  ptyManager.spawnSession('local');
+  ptyManager.spawnSession();
 
   const testPort = 3015;
   const webServer = new WebServer(ptyManager, testPort);

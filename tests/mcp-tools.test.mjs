@@ -33,7 +33,7 @@ async function pollUntil(client, predicate, cursor = 0, timeoutMs = 5000) {
 }
 
 const manager = new PtyManager();
-manager.spawnSession('local');
+manager.spawnSession();
 const terminalServer = new TerminalMcpServer(manager);
 const client = new Client({ name: 'interminal-test', version: '1.0.0' });
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

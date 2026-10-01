@@ -8,8 +8,8 @@ description: Guidelines for operating the Interminal interactive terminal compan
 ### 🛠️ Quick Tools Overview
 - **`write_to_terminal`**: Send commands, interactive inputs, or control characters (e.g. `\x03` with `auto_enter: false` for `Ctrl+C`). Defaults to `auto_enter: true`.
 - **`read_terminal`**: Read cleaned terminal output. Always pass `cursor` from the previous call to receive only new output.
-- **`start_session`**: Start or switch terminal sessions (supports local shell or SSH).
-- **`get_session_status`**: Inspect active session, process ID, dimensions, and busy state.
+- **`start_session`**: Start or restart the interactive terminal session (spawns a fresh shell and resets buffer).
+- **`get_session_status`**: Inspect active session process ID and dimensions.
 
 ### 1. Opening the Web Companion
 - When the user asks to open Interminal, open `http://localhost:3010` using the agent environment's built-in browser (e.g., the **Preview pane** in Hermes).

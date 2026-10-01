@@ -120,8 +120,8 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
 | :--- | :--- |
 | **`write_to_terminal`** | Writes commands, interactive prompt responses, single keystrokes, or control codes (`\x03` for Ctrl+C). Defaults to auto-appending newline (`auto_enter: true`). |
 | **`read_terminal`** | Reads clean plain-text terminal scrollback using cursor-based pagination (capped at 500 lines per call) with `has_more` indicators. |
-| **`start_session`** | Switches or spawns a new terminal session (local POSIX shell or remote SSH shell). |
-| **`get_session_status`**| Inspects the active terminal session, PID, busy state, and dimensions. |
+| **`start_session`** | Restarts or spawns a fresh terminal shell session. |
+| **`get_session_status`**| Inspects the active terminal session PID and dimensions. |
 
 ### Running Commands & Reading Output
 

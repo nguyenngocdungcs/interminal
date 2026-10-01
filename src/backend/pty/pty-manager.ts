@@ -1,11 +1,7 @@
 import * as pty from 'node-pty';
 import { EventEmitter } from 'events';
 
-export type SessionType = 'local' | 'ssh';
-
 export interface SessionStatus {
-  sessionType: SessionType;
-  target?: string;
   pid: number;
   cols: number;
   rows: number;
@@ -36,8 +32,6 @@ export function stripAnsi(text: string): string {
 
 export class PtyManager extends EventEmitter {
   private ptyProcess: pty.IPty | null = null;
-  private sessionType: SessionType = 'local';
-  private target?: string;
   private cols = 80;
   private rows = 24;
 
@@ -48,7 +42,7 @@ export class PtyManager extends EventEmitter {
   private totalChars = 0;
   private hasPendingCR = false;
 
-  public spawnSession(type: SessionType = 'local', target?: string): SessionStatus {
+  public spawnSession(): SessionStatus {
     if (this.ptyProcess) {
       try {
         this.ptyProcess.kill();
@@ -58,8 +52,6 @@ export class PtyManager extends EventEmitter {
       this.ptyProcess = null;
     }
 
-    this.sessionType = type;
-    this.target = target;
     this.resetBuffer();
 
     const shell = process.platform === 'win32'
@@ -71,29 +63,19 @@ export class PtyManager extends EventEmitter {
       COLORTERM: 'truecolor',
     };
 
-    if (type === 'ssh' && target) {
-      const sshArgs = target.split(' ').filter(Boolean);
-      this.ptyProcess = pty.spawn('ssh', sshArgs, {
-        name: 'xterm-256color',
-        cols: this.cols,
-        rows: this.rows,
-        env,
-      });
-    } else {
-      let workingDir = process.env.HOME || '/';
-      try {
-        workingDir = process.cwd();
-      } catch {
-        // Fall back when the parent process has an invalid cwd.
-      }
-      this.ptyProcess = pty.spawn(shell, [], {
-        name: 'xterm-256color',
-        cols: this.cols,
-        rows: this.rows,
-        cwd: workingDir,
-        env,
-      });
+    let workingDir = process.env.HOME || '/';
+    try {
+      workingDir = process.cwd();
+    } catch {
+      // Fall back when the parent process has an invalid cwd.
     }
+    this.ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: this.cols,
+      rows: this.rows,
+      cwd: workingDir,
+      env,
+    });
 
     const sessionPty = this.ptyProcess;
     sessionPty.onData((data: string) => {
@@ -121,7 +103,7 @@ export class PtyManager extends EventEmitter {
 
   public writeToTerminal(input: string, autoEnter = true): void {
     if (!this.ptyProcess) {
-      this.spawnSession(this.sessionType, this.target);
+      this.spawnSession();
     }
     const formatted = autoEnter && !/[\r\n]$/.test(input) ? `${input}\n` : input;
     this.write(formatted);
@@ -179,8 +161,6 @@ export class PtyManager extends EventEmitter {
 
   public getStatus(): SessionStatus {
     return {
-      sessionType: this.sessionType,
-      target: this.target,
       pid: this.ptyProcess?.pid ?? -1,
       cols: this.cols,
       rows: this.rows,

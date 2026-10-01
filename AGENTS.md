@@ -24,10 +24,10 @@
 ### B. Observer Terminal Model
 - `write_to_terminal`: Dispatches input to the active PTY (auto-appends `\n` by default).
 - `read_terminal`: Returns paginated plain-text output with cursor tracking. Keep response payloads lean to conserve agent context tokens.
-- `get_session_status` / `start_session`: For inspecting or switching terminal sessions.
+- `get_session_status` / `start_session`: For inspecting or restarting the terminal session.
 
-### C. Unified Shell Handling
-- Handles both local shells (`process.env.SHELL`) and remote SSH sessions with the same streaming and buffer lifecycle.
+### C. Persistent Shell Handling
+- Preserves shell state (environment variables, working directory, background processes) across tool calls.
 
 ---
 

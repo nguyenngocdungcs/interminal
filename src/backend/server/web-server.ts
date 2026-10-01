@@ -170,7 +170,7 @@ export class WebServer {
             } else if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
               this.ptyManager.resize(parsed.cols, parsed.rows);
             } else if (parsed.type === 'spawn') {
-              const status = this.ptyManager.spawnSession(parsed.sessionType, parsed.target);
+              const status = this.ptyManager.spawnSession();
               this.broadcast(JSON.stringify({ type: 'status', status }));
             }
           } catch {

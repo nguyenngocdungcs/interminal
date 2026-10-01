@@ -22,7 +22,7 @@ async function waitForOutput(manager, predicate, cursor = 0, timeoutMs = 5000) {
 async function testWriteAndReadBasic() {
   console.log('[Test 1] writeToTerminal and readTerminal basic flow');
   const manager = new PtyManager();
-  manager.spawnSession('local');
+  manager.spawnSession();
 
   // Initial read should be empty or shell prompt
   const initial = manager.readTerminal();
@@ -59,7 +59,7 @@ async function testAnsiStrippingAndCarriageReturns() {
 async function testPaginationAndHasMore() {
   console.log('[Test 3] Cursor-based pagination with 500-line cap and has_more flag');
   const manager = new PtyManager();
-  manager.spawnSession('local');
+  manager.spawnSession();
 
   // Write a command generating 600 lines
   const initial = manager.readTerminal();
@@ -101,7 +101,7 @@ async function testRollingBufferEviction() {
 async function testControlInterrupt() {
   console.log('[Test 5] Control character interrupt (Ctrl+C / \\x03)');
   const manager = new PtyManager();
-  manager.spawnSession('local');
+  manager.spawnSession();
 
   const initial = manager.readTerminal();
   // Start a sleep command that would run for 30s

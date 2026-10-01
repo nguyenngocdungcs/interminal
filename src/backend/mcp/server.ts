@@ -54,17 +54,11 @@ export class TerminalMcpServer {
 
     this.server.tool(
       'start_session',
-      'Start a new local shell or remote SSH terminal session.',
-      {
-        session_type: z.enum(['local', 'ssh']).describe('Session type ("local" or "ssh").'),
-        target: z.string().optional().describe('SSH target and optional arguments. Required for ssh sessions.'),
-      },
-      async ({ session_type, target }) => {
+      'Start or restart the interactive terminal session with a fresh shell and reset output buffer.',
+      {},
+      async () => {
         try {
-          if (session_type === 'ssh' && !target) {
-            throw new Error('target is required for an SSH session.');
-          }
-          return this.jsonResponse(this.ptyManager.spawnSession(session_type, target));
+          return this.jsonResponse(this.ptyManager.spawnSession());
         } catch (error) {
           return this.errorResponse(error);
         }
@@ -73,7 +67,7 @@ export class TerminalMcpServer {
 
     this.server.tool(
       'get_session_status',
-      'Retrieve terminal session type, process PID, and dimensions.',
+      'Retrieve terminal process PID and dimensions.',
       {},
       async () => this.jsonResponse(this.ptyManager.getStatus()),
     );

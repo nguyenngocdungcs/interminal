@@ -29,9 +29,9 @@ try {
 async function main() {
   const webPort = parseInt(process.env.PORT || '3010', 10);
 
-  // 1. Initialize PTY Manager & spawn default local shell
+  // 1. Initialize PTY Manager & spawn default shell
   const ptyManager = new PtyManager();
-  ptyManager.spawnSession('local');
+  ptyManager.spawnSession();
 
   // 2. Start Web Companion + MCP Server (SSE & Streamable HTTP)
   const webServer = new WebServer(ptyManager, webPort);

@@ -6,7 +6,7 @@ import { WebServer } from '../src/backend/server/web-server.js';
 
 const PORT = 3016;
 const ptyManager = new PtyManager();
-ptyManager.spawnSession('local');
+ptyManager.spawnSession();
 
 const webServer = new WebServer(ptyManager, PORT);
 const webUrl = await webServer.start();
