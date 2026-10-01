@@ -187,6 +187,17 @@ export class PtyManager extends EventEmitter {
     };
   }
 
+  public destroy(): void {
+    if (this.ptyProcess) {
+      try {
+        this.ptyProcess.kill();
+      } catch {
+        // Ignore errors during cleanup
+      }
+      this.ptyProcess = null;
+    }
+  }
+
   private resetBuffer(): void {
     this.lines = [];
     this.currentLine = '';

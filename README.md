@@ -12,53 +12,94 @@ While your AI agent is running commands on your machine or over SSH, Interminal 
 
 ---
 
-## 🚀 Quick Setup (1 Minute)
+## 🚀 Quick Setup
 
-### 1. Clone & Build
+### 1. Build
 ```bash
-git clone https://github.com/your-username/interminal.git
-cd interminal
 npm install
 npm run build
 ```
 
+### 2. Start Interminal in Your Terminal
+```bash
+npm start
+```
+You will see:
+```text
+┌────────────────────────────────────────────────────────┐
+│  Interminal Companion Server Running                   │
+│                                                        │
+│  • Web UI:       http://localhost:3010                 │
+│  • WebSocket:    http://localhost:3010/ws              │
+│  • MCP SSE URL:  http://localhost:3010/sse             │
+└────────────────────────────────────────────────────────┘
+```
+> 💡 **Why this is better:** You have full control over the process in your own terminal tab, you can see all server logs live, and you can stop it cleanly at any time with `Ctrl+C`.
+
 ---
 
-## 🤖 Connecting to Your AI Agent
+## 🤖 Connecting Your AI Agent (MCP Configuration)
 
-### With Hermes Agent
-Add the following to your Hermes MCP configuration (e.g. in `~/.hermes/config.json` or your project's MCP config):
+Add Interminal to your agent's MCP configuration using the SSE URL `http://localhost:3010/sse` (or `http://localhost:3010/mcp`):
 
+#### Cursor (`~/.cursor/mcp.json` or Project Settings)
 ```json
 {
   "mcpServers": {
     "interminal": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/interminal/dist/backend/index.js"
-      ]
+      "url": "http://localhost:3010/sse"
     }
   }
 }
 ```
 
-### With Claude Desktop
-Add the following to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
+#### Hermes Agent (`~/.hermes/config.json` or MCP settings)
 ```json
 {
   "mcpServers": {
     "interminal": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/interminal/dist/backend/index.js"
-      ]
+      "url": "http://localhost:3010/sse"
     }
   }
 }
 ```
 
-> **✨ How it works:** When Hermes or Claude starts, it will automatically launch Interminal in the background. Simply open **[http://localhost:3010](http://localhost:3010)** in your browser to view and interact with your terminal live!
+#### Claude Desktop / Antigravity / Cline / Roo Code / LibreChat
+```json
+{
+  "mcpServers": {
+    "interminal": {
+      "url": "http://localhost:3010/sse"
+    }
+  }
+}
+```
+
+---
+
+## 🧠 Agent Skill Installation (Hermes, Claude)
+
+To help your agent know how to interact with the companion UI, wait on long-running tasks, and handle sensitive prompts, install the `interminal` skill:
+
+### For Hermes Agent
+```bash
+# Global install (recommended)
+mkdir -p ~/.hermes/skills/interminal
+cp skills/SKILL.md ~/.hermes/skills/interminal/SKILL.md
+
+# Or local project install
+mkdir -p .hermes/skills/interminal
+cp skills/SKILL.md .hermes/skills/interminal/SKILL.md
+```
+
+### For Claude Code / Claude Desktop
+```bash
+# Claude Code (CLI) - append to CLAUDE.md
+cat skills/SKILL.md >> CLAUDE.md
+
+# Claude Desktop / Claude Projects
+# Upload skills/SKILL.md to Project Knowledge or copy into Custom Instructions.
+```
 
 ---
 
@@ -117,12 +158,12 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
 
 ```mermaid
 flowchart TD
-    subgraph AI ["AI Agent (Claude / Hermes)"]
+    subgraph AI ["AI Agent (Claude / Hermes / Cursor / Antigravity)"]
         Agent["AI Reasoning Core"]
     end
 
     subgraph Interminal ["Interminal Backend (Port 3010)"]
-        MCP["MCP Stdio Server\n(Observer API)"]
+        MCP["MCP SSE & HTTP Server\n(/sse, /mcp)"]
         PTY["Persistent Shell Engine\n(node-pty + Rolling Buffer)"]
         WebBridge["Fastify Web & WebSocket Server"]
     end
@@ -131,7 +172,7 @@ flowchart TD
         UI["Live Terminal\n(React + Tailwind + xterm.js)"]
     end
 
-    Agent <-->|"Stdio (JSON-RPC)"| MCP
+    Agent <-->|"MCP over SSE / HTTP"| MCP
     MCP <--> PTY
     PTY <-->|"Spawn & Stream"| Shell["Local Shell or SSH"]
     PTY -->|"Live Stream Broadcast"| WebBridge

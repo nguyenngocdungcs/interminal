@@ -1,5 +1,4 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { PtyManager } from '../pty/pty-manager.js';
 
@@ -91,10 +90,5 @@ export class TerminalMcpServer {
     return this.jsonResponse({
       error: error instanceof Error ? error.message : String(error),
     }, true);
-  }
-
-  public async start(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
   }
 }

@@ -17,9 +17,9 @@
 
 ## 2. Invariants & Key Gotchas
 
-### A. Zero-Latency MCP Handshake
-- The MCP server **must connect to `StdioServerTransport` immediately and synchronously** on process launch.
-- Never block MCP startup on asynchronous operations (like web server listening or network calls), or MCP clients may time out during initialization.
+### A. Standalone Companion & MCP Server
+- Interminal runs as a standalone server exposing Web UI (`/`), WebSocket stream (`/ws`), and MCP endpoints (`/sse`, `/mcp`).
+- AI agents connect via SSE/HTTP transport (`http://localhost:3010/sse`). Multiple clients can connect concurrently.
 
 ### B. Observer Terminal Model
 - `write_to_terminal`: Dispatches input to the active PTY (auto-appends `\n` by default).

@@ -1,7 +1,6 @@
 import os from 'os';
 import { execFileSync } from 'child_process';
 import { PtyManager } from './pty/pty-manager.js';
-import { TerminalMcpServer } from './mcp/server.js';
 import { WebServer } from './server/web-server.js';
 
 // Hermes filters SSH_AUTH_SOCK from MCP subprocess environments.
@@ -34,18 +33,39 @@ async function main() {
   const ptyManager = new PtyManager();
   ptyManager.spawnSession('local');
 
-  // 2. Connect MCP Stdio Server FIRST so handshake begins with zero delay
-  const mcpServer = new TerminalMcpServer(ptyManager);
-  await mcpServer.start();
-  console.error('[Interminal] MCP Server running on stdio.');
-
-  // 3. Start Web Server in background
+  // 2. Start Web Companion + MCP Server (SSE & Streamable HTTP)
   const webServer = new WebServer(ptyManager, webPort);
-  webServer.start().then((webUrl) => {
-    console.error(`[Interminal] Web Companion listening at ${webUrl} (WS endpoint: ${webUrl}/ws)`);
-  }).catch((err) => {
-    console.error('[Interminal] WebServer Error:', err);
-  });
+  const webUrl = await webServer.start();
+
+  console.log(`
+┌────────────────────────────────────────────────────────┐
+│  Interminal Companion Server Running                   │
+│                                                        │
+│  • Web UI:       ${webUrl.padEnd(37)} │
+│  • WebSocket:    ${(webUrl + '/ws').padEnd(37)} │
+│  • MCP SSE URL:  ${(webUrl + '/sse').padEnd(37)} │
+│                                                        │
+│  MCP Client Config:                                    │
+│  {                                                     │
+│    "interminal": {                                     │
+│      "url": "${webUrl}/sse"                │
+│    }                                                   │
+│  }                                                     │
+│                                                        │
+│  Press Ctrl+C to stop the server and close sessions.   │
+└────────────────────────────────────────────────────────┘
+  `);
+
+  // Graceful shutdown on Ctrl+C (SIGINT) or SIGTERM
+  const shutdown = async () => {
+    console.log('\n[Interminal] Shutting down cleanly...');
+    await webServer.stop();
+    ptyManager.destroy();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 main().catch((err) => {

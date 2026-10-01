@@ -15,7 +15,7 @@
     "dev:frontend": "vite",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "start": "node dist/backend/index.js",
-    "test": "tsx tests/pty.test.mjs && tsx tests/terminal-observer.test.mjs && tsx tests/mcp-tools.test.mjs && tsx tests/integration.test.mjs",
+    "test": "tsx tests/pty.test.mjs && tsx tests/terminal-observer.test.mjs && tsx tests/mcp-tools.test.mjs && tsx tests/integration.test.mjs && tsx tests/mcp-sse.test.mjs",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
   },
   "keywords": [
