@@ -21,10 +21,12 @@
 - Interminal runs as a standalone server exposing Web UI (`/`), WebSocket stream (`/ws`), and MCP endpoints (`/sse`, `/mcp`).
 - AI agents connect via SSE/HTTP transport (`http://localhost:3010/sse`). Multiple clients can connect concurrently.
 
-### B. Observer Terminal Model
-- `write_to_terminal`: Dispatches input to the active PTY (auto-appends `\n` by default).
-- `read_terminal`: Returns paginated plain-text output with cursor tracking. Keep response payloads lean to conserve agent context tokens.
-- `get_session_status` / `start_session`: For inspecting or restarting the terminal session.
+### B. Observer & Multi-Tab Model
+- All tools follow `noun_verb` naming: `tab_list`, `tab_create`, `tab_close`, `tab_rename`, `terminal_write`, `terminal_read`.
+- `terminal_write`: Dispatches input to the specific tab specified by required `tabId: number` (auto-appends `\n` by default).
+- `terminal_read`: Returns paginated plain-text output with cursor tracking from the specific tab specified by required `tabId: number`.
+- `tab_list`, `tab_create`, `tab_close`, `tab_rename`: For inspecting, creating, closing, and renaming standalone terminal sessions keyed by 0-indexed integer IDs (`0`, `1`, `2`...).
+
 
 ### C. Persistent Shell Handling
 - Preserves shell state (environment variables, working directory, background processes) across tool calls.

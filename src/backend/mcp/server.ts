@@ -1,13 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { PtyManager } from '../pty/pty-manager.js';
+import { TabManager } from '../pty/tab-manager.js';
 
 export class TerminalMcpServer {
   public readonly server: McpServer;
-  private ptyManager: PtyManager;
+  private tabManager: TabManager;
 
-  constructor(ptyManager: PtyManager) {
-    this.ptyManager = ptyManager;
+  constructor(tabManager: TabManager) {
+    this.tabManager = tabManager;
     this.server = new McpServer({
       name: 'interminal',
       version: '0.1.0',
@@ -17,15 +17,54 @@ export class TerminalMcpServer {
 
   private registerTools(): void {
     this.server.tool(
-      'write_to_terminal',
-      'Write commands, interactive input, or control characters (e.g. \\x03 for Ctrl+C) to the terminal session.',
-      {
-        input: z.string().describe('The command string, keystrokes, or control characters to write to the terminal.'),
-        auto_enter: z.boolean().optional().default(true).describe('Automatically append newline (\\n) if not already present. Defaults to true. Set to false for single keystrokes or control sequences.'),
-      },
-      async ({ input, auto_enter }) => {
+      'tab_list',
+      'List all active terminal tabs.',
+      {},
+      async () => {
         try {
-          this.ptyManager.writeToTerminal(input, auto_enter);
+          return this.jsonResponse({
+            tabs: this.tabManager.getTabs(),
+          });
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
+    this.server.tool(
+      'tab_create',
+      'Create a new standalone terminal tab.',
+      {
+        title: z.string().optional().describe('Optional title for the new terminal tab.'),
+      },
+      async ({ title }) => {
+        try {
+          const session = this.tabManager.createTab(title);
+          return this.jsonResponse({
+            success: true,
+            tab: {
+              id: session.id,
+              title: session.title,
+            },
+          });
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
+    this.server.tool(
+      'tab_close',
+      'Close a terminal tab by its numeric tabId.',
+      {
+        tabId: z.number().int().nonnegative().describe('0-indexed integer ID of the tab to close.'),
+      },
+      async ({ tabId }) => {
+        try {
+          const closed = this.tabManager.closeTab(tabId);
+          if (!closed) {
+            return this.errorResponse(new Error(`Tab not found: ${tabId}`));
+          }
           return this.jsonResponse({
             success: true,
           });
@@ -36,40 +75,69 @@ export class TerminalMcpServer {
     );
 
     this.server.tool(
-      'read_terminal',
-      'Read sanitized plain-text output from the terminal session using cursor-based pagination (up to 500 lines per call).',
+      'tab_rename',
+      'Rename an existing terminal tab.',
       {
-        cursor: z.number().int().nonnegative().optional().describe('0-indexed line cursor to read from. Omit to read from start or oldest retained line.'),
+        tabId: z.number().int().nonnegative().describe('0-indexed integer ID of the tab to rename.'),
+        title: z.string().describe('New title for the terminal tab.'),
+      },
+      async ({ tabId, title }) => {
+        try {
+          const tab = this.tabManager.renameTab(tabId, title);
+          return this.jsonResponse({
+            success: true,
+            tab,
+          });
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
+    this.server.tool(
+      'terminal_write',
+      'Write commands, interactive input, or control characters (e.g. \\x03 for Ctrl+C) to a specific terminal tab.',
+      {
+        tabId: z.number().int().nonnegative().describe('0-indexed integer ID of target terminal tab.'),
+        input: z.string().describe('The command string, keystrokes, or control characters to write to the tab.'),
+        auto_enter: z.boolean().optional().default(true).describe('Automatically append newline (\\n) if not already present. Defaults to true. Set to false for single keystrokes or control sequences.'),
+      },
+      async ({ tabId, input, auto_enter }) => {
+        try {
+          const session = this.tabManager.getTab(tabId);
+          if (!session) {
+            return this.errorResponse(new Error(`Tab not found: ${tabId}`));
+          }
+          session.ptyManager.writeToTerminal(input, auto_enter);
+          return this.jsonResponse({
+            success: true,
+          });
+        } catch (error) {
+          return this.errorResponse(error);
+        }
+      },
+    );
+
+    this.server.tool(
+      'terminal_read',
+      'Read sanitized plain-text output from a specific terminal tab using cursor-based pagination (up to 500 lines per call).',
+      {
+        tabId: z.number().int().nonnegative().describe('0-indexed integer ID of target terminal tab.'),
+        cursor: z.number().int().nonnegative().optional().describe('0-indexed line cursor to read from.'),
         limit: z.number().int().positive().optional().describe('Maximum number of lines to return (capped at 500, default: 500).'),
       },
-      async ({ cursor, limit }) => {
+      async ({ tabId, cursor, limit }) => {
         try {
-          const result = this.ptyManager.readTerminal({ cursor, limit });
+          const session = this.tabManager.getTab(tabId);
+          if (!session) {
+            return this.errorResponse(new Error(`Tab not found: ${tabId}`));
+          }
+          const result = session.ptyManager.readTerminal({ cursor, limit });
           return this.jsonResponse(result);
         } catch (error) {
           return this.errorResponse(error);
         }
       },
-    );
-
-    this.server.tool(
-      'start_session',
-      'Start or restart the interactive terminal session with a fresh shell and reset output buffer.',
-      {},
-      async () => {
-        try {
-          return this.jsonResponse(this.ptyManager.spawnSession());
-        } catch (error) {
-          return this.errorResponse(error);
-        }
-      },
-    );
-
-    this.server.tool(
-      'get_session_status',
-      'Retrieve terminal process PID and dimensions.',
-      {},
-      async () => this.jsonResponse(this.ptyManager.getStatus()),
     );
   }
 
@@ -86,3 +154,4 @@ export class TerminalMcpServer {
     }, true);
   }
 }
+

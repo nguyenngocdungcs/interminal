@@ -7,19 +7,20 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'node:crypto';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { PtyManager } from '../pty/pty-manager.js';
+import { TabManager, TabInfo } from '../pty/tab-manager.js';
 import { TerminalMcpServer } from '../mcp/server.js';
+
 
 export class WebServer {
   private app: FastifyInstance;
-  private ptyManager: PtyManager;
+  private tabManager: TabManager;
   private port: number;
   private connectedSockets: Set<WebSocket> = new Set();
   private sseTransports: Map<string, SSEServerTransport> = new Map();
   private streamableTransports: Map<string, StreamableHTTPServerTransport> = new Map();
 
-  constructor(ptyManager: PtyManager, port: number = 3010) {
-    this.ptyManager = ptyManager;
+  constructor(tabManager: TabManager, port: number = 3010) {
+    this.tabManager = tabManager;
     this.port = port;
     this.app = Fastify({ logger: false });
   }
@@ -99,7 +100,7 @@ export class WebServer {
       enableJsonResponse: true,
     });
 
-    const mcpServer = new TerminalMcpServer(this.ptyManager);
+    const mcpServer = new TerminalMcpServer(this.tabManager);
     await mcpServer.server.connect(transport);
 
     transport.onclose = () => {
@@ -114,7 +115,7 @@ export class WebServer {
   private async handleSseConnect(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     reply.hijack();
     const transport = new SSEServerTransport('/message', reply.raw);
-    const mcpServer = new TerminalMcpServer(this.ptyManager);
+    const mcpServer = new TerminalMcpServer(this.tabManager);
 
     this.sseTransports.set(transport.sessionId, transport);
     transport.onclose = () => {
@@ -157,24 +158,33 @@ export class WebServer {
       fastify.get('/ws', { websocket: true }, (socket, req) => {
         this.connectedSockets.add(socket);
 
+        // Send current tab list upon connection
         socket.send(JSON.stringify({
-          type: 'status',
-          status: this.ptyManager.getStatus(),
+          type: 'tab_list',
+          tabs: this.tabManager.getTabs(),
         }));
 
         socket.on('message', (rawMessage: any) => {
           try {
             const parsed = JSON.parse(rawMessage.toString());
-            if (parsed.type === 'input' && typeof parsed.data === 'string') {
-              this.ptyManager.write(parsed.data);
-            } else if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-              this.ptyManager.resize(parsed.cols, parsed.rows);
-            } else if (parsed.type === 'spawn') {
-              const status = this.ptyManager.spawnSession();
-              this.broadcast(JSON.stringify({ type: 'status', status }));
+            const type = parsed.type;
+            const tabId = typeof parsed.tabId === 'number' ? parsed.tabId : 0;
+
+            if (type === 'terminal_input' && typeof parsed.data === 'string') {
+              this.tabManager.getTab(tabId)?.ptyManager.write(parsed.data);
+            } else if (type === 'terminal_resize' && parsed.cols && parsed.rows) {
+              this.tabManager.getTab(tabId)?.ptyManager.resize(parsed.cols, parsed.rows);
+            } else if (type === 'tab_create') {
+              this.tabManager.createTab(parsed.title);
+            } else if (type === 'tab_close' && typeof parsed.tabId === 'number') {
+              this.tabManager.closeTab(parsed.tabId);
+            } else if (type === 'tab_rename' && typeof parsed.tabId === 'number' && parsed.title) {
+              this.tabManager.renameTab(parsed.tabId, parsed.title);
+            } else if (type === 'tab_switch' && typeof parsed.tabId === 'number') {
+              this.tabManager.setActiveTabId(parsed.tabId);
             }
           } catch {
-            this.ptyManager.write(rawMessage.toString());
+            // Ignore malformed WS payloads
           }
         });
 
@@ -183,17 +193,31 @@ export class WebServer {
       });
     });
 
-    this.ptyManager.on('data', (data: string) => {
-      this.broadcast(JSON.stringify({ type: 'output', data }));
+    this.tabManager.on('data', (tabId: number, data: string) => {
+      this.broadcast(JSON.stringify({ type: 'terminal_output', tabId, data }));
     });
 
-    this.ptyManager.on('exit', ({ exitCode, signal }) => {
+    this.tabManager.on('exit', (tabId: number, info: { exitCode: number; signal?: number }) => {
       this.broadcast(JSON.stringify({
-        type: 'exit',
-        exitCode,
-        signal,
-        status: this.ptyManager.getStatus(),
+        type: 'terminal_exit',
+        tabId,
+        exitCode: info.exitCode,
+        signal: info.signal,
       }));
+    });
+
+    this.tabManager.on('tab_created', (tab: TabInfo) => {
+      this.broadcast(JSON.stringify({ type: 'tab_created', tab }));
+      this.broadcast(JSON.stringify({ type: 'tab_list', tabs: this.tabManager.getTabs() }));
+    });
+
+    this.tabManager.on('tab_closed', (tabId: number) => {
+      this.broadcast(JSON.stringify({ type: 'tab_closed', tabId }));
+      this.broadcast(JSON.stringify({ type: 'tab_list', tabs: this.tabManager.getTabs() }));
+    });
+
+    this.tabManager.on('tab_renamed', () => {
+      this.broadcast(JSON.stringify({ type: 'tab_list', tabs: this.tabManager.getTabs() }));
     });
   }
 
@@ -263,3 +287,4 @@ export class WebServer {
     await this.app.close();
   }
 }
+

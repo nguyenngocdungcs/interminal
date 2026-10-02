@@ -1,6 +1,6 @@
 import os from 'os';
 import { execFileSync } from 'child_process';
-import { PtyManager } from './pty/pty-manager.js';
+import { TabManager } from './pty/tab-manager.js';
 import { WebServer } from './server/web-server.js';
 
 // Hermes filters SSH_AUTH_SOCK from MCP subprocess environments.
@@ -29,12 +29,11 @@ try {
 async function main() {
   const webPort = parseInt(process.env.PORT || '3010', 10);
 
-  // 1. Initialize PTY Manager & spawn default shell
-  const ptyManager = new PtyManager();
-  ptyManager.spawnSession();
+  // 1. Initialize Tab Manager
+  const tabManager = new TabManager();
 
   // 2. Start Web Companion + MCP Server (SSE & Streamable HTTP)
-  const webServer = new WebServer(ptyManager, webPort);
+  const webServer = new WebServer(tabManager, webPort);
   const webUrl = await webServer.start();
 
   console.log(`
@@ -60,13 +59,14 @@ async function main() {
   const shutdown = async () => {
     console.log('\n[Interminal] Shutting down cleanly...');
     await webServer.stop();
-    ptyManager.destroy();
+    tabManager.destroyAll();
     process.exit(0);
   };
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }
+
 
 main().catch((err) => {
   console.error('[Interminal] Fatal Error:', err);

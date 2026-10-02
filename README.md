@@ -118,22 +118,24 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
 
 | Tool | Description |
 | :--- | :--- |
-| **`write_to_terminal`** | Writes commands, interactive prompt responses, single keystrokes, or control codes (`\x03` for Ctrl+C). Defaults to auto-appending newline (`auto_enter: true`). |
-| **`read_terminal`** | Reads clean plain-text terminal scrollback using cursor-based pagination (capped at 500 lines per call) with `has_more` indicators. |
-| **`start_session`** | Restarts or spawns a fresh terminal shell session. |
-| **`get_session_status`**| Inspects the active terminal session PID and dimensions. |
+| **`tab_list`** | Lists all active terminal tabs with numeric `id` and `title`. |
+| **`tab_create`** | Creates a new standalone terminal tab with optional `title`. Returns `{ tab: { id, title } }`. |
+| **`tab_close`** | Closes a terminal tab by its required numeric `tabId`. |
+| **`tab_rename`** | Renames a terminal tab given its required numeric `tabId` and `title`. |
+| **`terminal_write`** | Writes commands, prompt responses, keystrokes, or control codes (`\x03` for Ctrl+C) to `tabId` (required integer). Defaults to `auto_enter: true`. |
+| **`terminal_read`** | Reads clean plain-text output from `tabId` (required integer) using cursor pagination (capped at 500 lines per call). |
 
 ### Running Commands & Reading Output
 
-1. **Send command:**
+1. **Send command to Tab 0:**
    ```json
-   { "input": "npm test" }
+   { "tabId": 0, "input": "npm test" }
    ```
    *Note: `auto_enter` is `true` by default, executing the command immediately.*
 
-2. **Poll output:**
+2. **Poll output from Tab 0:**
    ```json
-   { "cursor": 0, "limit": 500 }
+   { "tabId": 0, "cursor": 0, "limit": 500 }
    ```
    Returns:
    ```json
@@ -144,13 +146,18 @@ Then visit **[http://localhost:3010](http://localhost:3010)**.
      "total_lines": 42
    }
    ```
-   To continue reading subsequent output, provide the returned `cursor` in the next call: `{"cursor": 42}`. The returned `cursor` matches the index of the last line in the batch so the active shell prompt and any typed commands on that line are seamlessly captured.
+   To continue reading subsequent output, provide the returned `cursor` in the next call: `{"tabId": 0, "cursor": 42}`.
 
-3. **Interactive Prompts:**
-   Send answers with the same tool: `{"input": "Alice"}` (auto-appends `\n`).
+3. **Multi-Tab Sessions:**
+   Create a new tab for a dev server:
+   ```json
+   { "title": "Dev Server" }
+   ```
+   Returns `{ "success": true, "tab": { "id": 1, "title": "Dev Server" } }`.
 
 4. **Canceling or Interrupting (`Ctrl+C`):**
-   Send interrupt control byte: `{"input": "\x03", "auto_enter": false}`.
+   Send interrupt control byte to target tab: `{"tabId": 0, "input": "\x03", "auto_enter": false}`.
+
 
 ---
 

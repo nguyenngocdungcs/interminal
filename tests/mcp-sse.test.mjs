@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { PtyManager } from '../src/backend/pty/pty-manager.js';
+import { TabManager } from '../src/backend/pty/tab-manager.js';
 import { WebServer } from '../src/backend/server/web-server.js';
 
 const PORT = 3016;
-const ptyManager = new PtyManager();
-ptyManager.spawnSession();
+const tabManager = new TabManager();
 
-const webServer = new WebServer(ptyManager, PORT);
+const webServer = new WebServer(tabManager, PORT);
 const webUrl = await webServer.start();
 
 console.log(`--- Starting MCP SSE Test on ${webUrl} ---`);
@@ -23,23 +22,25 @@ console.log('MCP SSE Client connected successfully!');
 // 1. Check tools
 const toolList = await client.listTools();
 const toolNames = toolList.tools.map((t) => t.name);
-assert.ok(toolNames.includes('write_to_terminal'), 'Should have write_to_terminal');
-assert.ok(toolNames.includes('read_terminal'), 'Should have read_terminal');
-assert.ok(toolNames.includes('start_session'), 'Should have start_session');
-assert.ok(toolNames.includes('get_session_status'), 'Should have get_session_status');
+assert.ok(toolNames.includes('tab_list'), 'Should have tab_list');
+assert.ok(toolNames.includes('tab_create'), 'Should have tab_create');
+assert.ok(toolNames.includes('tab_close'), 'Should have tab_close');
+assert.ok(toolNames.includes('tab_rename'), 'Should have tab_rename');
+assert.ok(toolNames.includes('terminal_write'), 'Should have terminal_write');
+assert.ok(toolNames.includes('terminal_read'), 'Should have terminal_read');
 console.log('Tool listing verified: PASS');
 
-// 2. Call write_to_terminal and read_terminal
+// 2. Call terminal_write and terminal_read on tab 0
 await client.callTool({
-  name: 'write_to_terminal',
-  arguments: { input: 'echo "SSE_MCP_TRANSPORT_TEST"' },
+  name: 'terminal_write',
+  arguments: { tabId: 0, input: 'echo "SSE_MCP_TRANSPORT_TEST"' },
 });
 
 let found = false;
 for (let i = 0; i < 20; i++) {
   const readRes = await client.callTool({
-    name: 'read_terminal',
-    arguments: {},
+    name: 'terminal_read',
+    arguments: { tabId: 0 },
   });
   const data = JSON.parse(readRes.content[0].text);
   if (data.text.includes('SSE_MCP_TRANSPORT_TEST')) {
@@ -61,12 +62,12 @@ const clientTransport2 = new SSEClientTransport(sseUrl);
 await client2.connect(clientTransport2);
 
 const tools2 = await client2.listTools();
-assert.equal(tools2.tools.length, 4, 'Should list 4 tools on reconnected session');
+assert.equal(tools2.tools.length, 6, 'Should list 6 tools on reconnected session');
 console.log('Reconnection test: PASS');
 
 await client2.close();
 await webServer.stop();
-ptyManager.destroy();
+tabManager.destroyAll();
 
 console.log('🎉 MCP SSE Test Passed Successfully!');
 process.exit(0);
